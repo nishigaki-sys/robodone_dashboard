@@ -43,7 +43,7 @@
         import { 
             LayoutDashboard, Users, Megaphone, TrendingUp, Calendar, 
             ArrowUpRight, ArrowDownRight, DollarSign, Activity, Filter, 
-            Download, RefreshCw, Loader2, AlertCircle, CheckCircle, ShieldCheck, MapPin
+            Download, RefreshCw, Loader2, AlertCircle, CheckCircle, ShieldCheck, MapPin, Layers
         } from "lucide-react";
 
         // ==========================================
@@ -64,6 +64,8 @@
             '青山本校', '新宿校', '池袋校', '横浜校', '吉祥寺校', 
             '大宮校', '千葉校', '名古屋校', '大阪梅田校', '福岡天神校'
         ];
+
+        const MONTHS_LIST = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
 
         // ==========================================
         // ヘルパー関数
@@ -101,7 +103,9 @@
         function RobotSchoolDashboard() {
             const [activeTab, setActiveTab] = useState('summary');
             const [selectedCampus, setSelectedCampus] = useState('All'); // 'All' or 校舎名
-            
+            const [viewMode, setViewMode] = useState('annual'); // 'annual', 'monthly', 'weekly'
+            const [selectedMonth, setSelectedMonth] = useState('4月');
+
             // データ状態管理
             const [rawDataMap, setRawDataMap] = useState(null); // 全校舎分の元データ { 'All': [], '青山': [], ... }
             const [displayData, setDisplayData] = useState([]); // 現在表示中のデータ配列
@@ -117,7 +121,7 @@
                     // APIキー設定なし（モックモード）
                     if (CONFIG.API_KEY === 'YOUR_API_KEY_HERE') {
                         console.log("Using Mock Data (No API Key set)");
-                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        await new Promise(resolve => setTimeout(resolve, 800));
                         
                         // 1. 全校舎分のデータを一括生成してメモリに保持
                         const generatedMap = generateAllCampusesData();
@@ -140,14 +144,32 @@
                 }
             };
 
-            // 校舎切り替え時のデータ反映
+            // 校舎・モード・月変更時のデータ反映
             useEffect(() => {
                 if (rawDataMap) {
-                    // 選択された校舎に対応するデータをセット
-                    // 'All'の場合は generateAllCampusesData で計算済みの 'All' キーを使用
-                    setDisplayData(rawDataMap[selectedCampus] || []);
+                    const campusData = rawDataMap[selectedCampus] || [];
+                    
+                    if (viewMode === 'annual') {
+                        // 年度表示: そのまま月次データを表示
+                        setDisplayData(campusData);
+                    } else {
+                        // 月度/週次表示: 選択された月を探す
+                        const targetMonthData = campusData.find(d => d.name === selectedMonth);
+                        
+                        if (targetMonthData) {
+                            if (viewMode === 'monthly') {
+                                // 月度表示: 日次データ (daily) を表示
+                                setDisplayData(targetMonthData.daily || []);
+                            } else if (viewMode === 'weekly') {
+                                // 週次表示: 週次データ (weekly) を表示
+                                setDisplayData(targetMonthData.weekly || []);
+                            }
+                        } else {
+                            setDisplayData([]);
+                        }
+                    }
                 }
-            }, [selectedCampus, rawDataMap]);
+            }, [selectedCampus, viewMode, selectedMonth, rawDataMap]);
 
             // 初回実行
             useEffect(() => {
@@ -155,95 +177,135 @@
             }, []);
 
             // ----------------------------------------------------------------
-            // モックデータ生成ロジック（全校舎対応版）
+            // モックデータ生成ロジック（階層構造：年度 > 月 > 週/日）
             // ----------------------------------------------------------------
             const generateAllCampusesData = () => {
-                const months = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
                 const dataMap = {};
 
                 // 校舎ごとのベースデータを生成
                 CAMPUS_LIST.forEach(campus => {
-                    // 校舎ごとの規模係数 (0.5倍 〜 1.5倍)
                     const scale = 0.5 + Math.random(); 
-                    let currentStudents = Math.floor(50 * scale); // 期首生徒数
+                    let currentStudents = Math.floor(50 * scale);
 
-                    dataMap[campus] = months.map((month, idx) => {
+                    dataMap[campus] = MONTHS_LIST.map((month, idx) => {
                         const seasonality = [0.8, 0.9, 1.0, 1.2, 1.3, 1.0, 1.0, 0.9, 1.1, 0.8, 0.9, 1.5][idx];
                         
-                        // 財務 (1教室あたり月200万目標 * 規模)
-                        const budgetRevenue = Math.floor(2000000 * scale * seasonality);
-                        const actualRevenue = Math.floor(budgetRevenue * (0.85 + Math.random() * 0.3)); // 達成率 85%~115%
-                        
-                        // 集客
-                        const flyers = Math.floor(1000 * scale * seasonality);
-                        const touchAndTry = Math.floor(flyers * 0.05);
-                        const trialLessons = Math.floor(touchAndTry * 0.4 + (Math.random() * 3));
-                        
-                        // 生徒フロー
-                        const newEnrollments = Math.floor(trialLessons * 0.6); // 入会率60%前後
-                        const withdrawals = Math.floor(Math.random() * 2);
-                        
-                        const netChange = newEnrollments - withdrawals;
-                        currentStudents += netChange;
+                        // 月次ベース値
+                        const monthlyBudget = Math.floor(2000000 * scale * seasonality);
+                        const monthlyActual = Math.floor(monthlyBudget * (0.85 + Math.random() * 0.3));
+                        const monthlyFlyers = Math.floor(1000 * scale * seasonality);
+                        const monthlyEnrollments = Math.floor(10 * scale * seasonality * 0.8);
+                        const monthlyWithdrawals = Math.floor(Math.random() * 2);
+
+                        // --- 日次データ生成 (30日分) ---
+                        const daily = Array.from({ length: 30 }, (_, dIdx) => {
+                            // 週末に実績が偏るようなランダム係数
+                            const isWeekend = (dIdx % 7 === 5 || dIdx % 7 === 6); 
+                            const dayFactor = isWeekend ? 1.5 : 0.8;
+                            
+                            return {
+                                name: `${dIdx + 1}日`,
+                                budgetRevenue: Math.floor(monthlyBudget / 30),
+                                actualRevenue: Math.floor((monthlyActual / 30) * dayFactor * (0.5 + Math.random())),
+                                newEnrollments: Math.random() > 0.9 ? 1 : 0,
+                                withdrawals: Math.random() > 0.95 ? 1 : 0,
+                                flyers: Math.floor((monthlyFlyers / 30) * dayFactor),
+                                trialLessons: Math.random() > 0.8 ? 1 : 0,
+                                // 積み上げ計算は省略し、当日のスナップショットとする
+                                totalStudents: currentStudents 
+                            };
+                        });
+
+                        // --- 週次データ生成 (4週分) ---
+                        const weekly = Array.from({ length: 4 }, (_, wIdx) => {
+                            const weekFactor = 1.0 + (Math.random() * 0.2 - 0.1);
+                            return {
+                                name: `第${wIdx + 1}週`,
+                                budgetRevenue: Math.floor(monthlyBudget / 4),
+                                actualRevenue: Math.floor((monthlyActual / 4) * weekFactor),
+                                newEnrollments: Math.floor(monthlyEnrollments / 4),
+                                withdrawals: wIdx === 3 ? monthlyWithdrawals : 0, // 月末に退会処理と仮定
+                                flyers: Math.floor(monthlyFlyers / 4),
+                                trialLessons: Math.floor((monthlyEnrollments / 0.6) / 4), // 簡易計算
+                                enrollmentRate: "60.0",
+                                totalStudents: currentStudents // 簡易的に同値
+                            };
+                        });
+
+                        // 月末の生徒数更新
+                        currentStudents += (monthlyEnrollments - monthlyWithdrawals);
 
                         return {
                             name: month,
-                            budgetRevenue,
-                            actualRevenue,
-                            newEnrollments,
-                            withdrawals,
+                            budgetRevenue: monthlyBudget,
+                            actualRevenue: monthlyActual,
+                            newEnrollments: monthlyEnrollments,
+                            withdrawals: monthlyWithdrawals,
                             transferIn: Math.floor(Math.random() * 0.5),
                             transferOut: 0,
                             readmission: 0,
                             graduates: idx === 11 ? Math.floor(5 * scale) : 0,
                             recess: 0,
                             totalStudents: currentStudents,
-                            flyers,
-                            touchAndTry,
-                            trialLessons,
-                            enrollmentRate: trialLessons > 0 ? ((newEnrollments / trialLessons) * 100).toFixed(1) : "0.0"
+                            flyers: monthlyFlyers,
+                            touchAndTry: Math.floor(monthlyFlyers * 0.05),
+                            trialLessons: Math.floor(monthlyEnrollments / 0.6),
+                            enrollmentRate: "60.0",
+                            // 階層データを持たせる
+                            daily: daily,
+                            weekly: weekly
                         };
                     });
                 });
 
-                // 'All' (全校舎合計) データの生成
-                dataMap['All'] = months.map((month, idx) => {
+                // 'All' (全校舎合計) の生成
+                dataMap['All'] = MONTHS_LIST.map((month, idx) => {
                     const combined = {
                         name: month,
-                        budgetRevenue: 0,
-                        actualRevenue: 0,
-                        newEnrollments: 0,
-                        withdrawals: 0,
-                        transferIn: 0,
-                        transferOut: 0,
-                        readmission: 0,
-                        graduates: 0,
-                        recess: 0,
-                        totalStudents: 0,
-                        flyers: 0,
-                        touchAndTry: 0,
-                        trialLessons: 0,
-                        enrollmentRate: "0.0"
+                        budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0,
+                        totalStudents: 0, flyers: 0, trialLessons: 0, graduates: 0,
+                        daily: Array.from({ length: 30 }, (_, i) => ({ 
+                            name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0, flyers: 0 
+                        })),
+                        weekly: Array.from({ length: 4 }, (_, i) => ({ 
+                            name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0, flyers: 0 
+                        }))
                     };
 
                     CAMPUS_LIST.forEach(campus => {
                         const d = dataMap[campus][idx];
+                        // 月次合計
                         combined.budgetRevenue += d.budgetRevenue;
                         combined.actualRevenue += d.actualRevenue;
                         combined.newEnrollments += d.newEnrollments;
                         combined.withdrawals += d.withdrawals;
                         combined.totalStudents += d.totalStudents;
                         combined.flyers += d.flyers;
-                        combined.touchAndTry += d.touchAndTry;
                         combined.trialLessons += d.trialLessons;
                         combined.graduates += d.graduates;
+
+                        // 日次・週次データの合算
+                        d.daily.forEach((day, dayIdx) => {
+                            if (combined.daily[dayIdx]) {
+                                combined.daily[dayIdx].actualRevenue += day.actualRevenue;
+                                combined.daily[dayIdx].budgetRevenue += day.budgetRevenue;
+                                combined.daily[dayIdx].newEnrollments += day.newEnrollments;
+                                combined.daily[dayIdx].flyers += day.flyers;
+                            }
+                        });
+                        d.weekly.forEach((week, weekIdx) => {
+                            if (combined.weekly[weekIdx]) {
+                                combined.weekly[weekIdx].actualRevenue += week.actualRevenue;
+                                combined.weekly[weekIdx].budgetRevenue += week.budgetRevenue;
+                                combined.weekly[weekIdx].newEnrollments += week.newEnrollments;
+                                combined.weekly[weekIdx].flyers += week.flyers;
+                            }
+                        });
                     });
 
                     // 平均入会率の再計算
-                    if (combined.trialLessons > 0) {
-                        combined.enrollmentRate = ((combined.newEnrollments / combined.trialLessons) * 100).toFixed(1);
-                    }
-
+                    combined.enrollmentRate = combined.trialLessons > 0 ? ((combined.newEnrollments / combined.trialLessons) * 100).toFixed(1) : "0.0";
+                    
                     return combined;
                 });
 
@@ -251,7 +313,7 @@
             };
 
             // ----------------------------------------------------------------
-            // 表示用集計（合計値など）
+            // 表示用集計（KPIカード等用）
             // ----------------------------------------------------------------
             const totals = useMemo(() => {
                 if (!displayData || displayData.length === 0) return { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0 };
@@ -265,6 +327,18 @@
 
             const revenueAchievement = totals.budgetRevenue > 0 ? Math.round((totals.actualRevenue / totals.budgetRevenue) * 100) : 0;
             const formatYen = (val) => `¥${val.toLocaleString()}`;
+
+            // 最新の生徒数（表示データ内の最終時点）
+            const currentTotalStudents = displayData.length > 0 
+                ? (viewMode === 'annual' ? displayData[displayData.length-1].totalStudents : displayData[0].totalStudents) // 日次は簡易的に初日を参照
+                : 0;
+
+            // 表示モードのラベル
+            const viewModeLabel = {
+                'annual': '年度 (4月-3月)',
+                'monthly': `月度 (${selectedMonth})`,
+                'weekly': `週次 (${selectedMonth})`
+            }[viewMode];
 
             // ローディング画面
             if (isLoading && !rawDataMap) {
@@ -303,10 +377,14 @@
                                 <span className="font-medium">集客・販促</span>
                             </button>
                         </nav>
-                        <div className="p-4 border-t border-slate-800 text-xs text-slate-400">
-                            <div className="flex items-center mb-2">
+                        <div className="p-4 border-t border-slate-800 text-xs text-slate-400 space-y-2">
+                            <div className="flex items-center">
                                 <MapPin className="w-3 h-3 mr-1" />
-                                選択中: {selectedCampus === 'All' ? '全校舎' : selectedCampus}
+                                校舎: {selectedCampus === 'All' ? '全校舎' : selectedCampus}
+                            </div>
+                            <div className="flex items-center">
+                                <Layers className="w-3 h-3 mr-1" />
+                                粒度: {viewMode === 'annual' ? '年度' : viewMode === 'monthly' ? '月度' : '週次'}
                             </div>
                         </div>
                     </aside>
@@ -320,10 +398,40 @@
                                 {activeTab === 'marketing' && '集客活動・販促管理'}
                             </h1>
                             
-                            <div className="flex items-center space-x-4">
-                                {/* 校舎切り替えセレクター */}
+                            <div className="flex items-center space-x-3">
+                                {/* 表示期間切り替え (年度/月度/週次) */}
+                                <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
+                                    <button 
+                                        onClick={() => setViewMode('annual')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'annual' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                    >年度</button>
+                                    <button 
+                                        onClick={() => setViewMode('monthly')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                    >月度</button>
+                                    <button 
+                                        onClick={() => setViewMode('weekly')}
+                                        className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
+                                    >週次</button>
+                                </div>
+
+                                {/* 月選択ドロップダウン (年度以外の時のみ表示) */}
+                                {viewMode !== 'annual' && (
+                                    <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200 animate-in fade-in zoom-in duration-200">
+                                        <Calendar className="w-3 h-3 text-slate-500 mr-2" />
+                                        <select 
+                                            value={selectedMonth} 
+                                            onChange={(e) => setSelectedMonth(e.target.value)}
+                                            className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1 pr-1"
+                                        >
+                                            {MONTHS_LIST.map(m => <option key={m} value={m}>{m}</option>)}
+                                        </select>
+                                    </div>
+                                )}
+
+                                {/* 校舎切り替え */}
                                 <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200">
-                                    <MapPin className="w-4 h-4 text-slate-500 mr-2" />
+                                    <MapPin className="w-3 h-3 text-slate-500 mr-2" />
                                     <select 
                                         value={selectedCampus} 
                                         onChange={(e) => setSelectedCampus(e.target.value)}
@@ -331,15 +439,12 @@
                                     >
                                         <option value="All">全校舎 (合計)</option>
                                         <option disabled>──────────</option>
-                                        {CAMPUS_LIST.map(c => (
-                                            <option key={c} value={c}>{c}</option>
-                                        ))}
+                                        {CAMPUS_LIST.map(c => <option key={c} value={c}>{c}</option>)}
                                     </select>
                                 </div>
 
-                                <button onClick={fetchDashboardData} className="flex items-center space-x-2 px-3 py-2 text-sm text-slate-600 hover:bg-slate-50 rounded-lg border transition-all">
+                                <button onClick={fetchDashboardData} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all">
                                     <RefreshCw className="w-4 h-4" />
-                                    <span>データ更新</span>
                                 </button>
                             </div>
                         </header>
@@ -350,15 +455,22 @@
                                 {activeTab === 'summary' && (
                                     <div className="space-y-6 animate-in fade-in duration-500">
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                                            <StatCard title="年間売上実績" value={formatYen(totals.actualRevenue)} subValue={`予算比 ${revenueAchievement}%`} trend={revenueAchievement - 100} icon={DollarSign} color="bg-blue-500" />
-                                            <StatCard title="現在の生徒数" value={`${displayData[displayData.length-1]?.totalStudents || 0}名`} subValue="当月時点" trend={3.2} icon={Users} color="bg-indigo-500" />
-                                            <StatCard title="体験会 (累計)" value={`${totals.trialLessons}回`} subValue="目標達成率 92%" trend={-8} icon={Calendar} color="bg-amber-500" />
-                                            <StatCard title="平均入会率" value={`${displayData[displayData.length-1]?.enrollmentRate || 0}%`} subValue="目標 60%" trend={5.0} icon={Activity} color="bg-emerald-500" />
+                                            {/* KPIカード: 選択されたビューの合計値を表示 */}
+                                            <StatCard title="売上実績 (選択期間)" value={formatYen(totals.actualRevenue)} subValue={`予算比 ${revenueAchievement}%`} trend={revenueAchievement - 100} icon={DollarSign} color="bg-blue-500" />
+                                            {/* 生徒数は年度表示なら現在値、月度/週次はデータがあるなら表示 */}
+                                            <StatCard title="生徒数" value={`${currentTotalStudents}名`} subValue="在籍数" trend={0} icon={Users} color="bg-indigo-500" />
+                                            <StatCard title="体験会 (選択期間)" value={`${totals.trialLessons}回`} subValue="実施回数" trend={0} icon={Calendar} color="bg-amber-500" />
+                                            <StatCard title="入会率 (平均)" value={`${displayData.length > 0 && displayData[0].enrollmentRate ? displayData[0].enrollmentRate : "60.0"}%`} subValue="目標 60%" trend={0} icon={Activity} color="bg-emerald-500" />
                                         </div>
                                         <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-96">
-                                            <h3 className="text-lg font-bold text-slate-800 mb-4">
-                                                予実管理推移 (売上) - {selectedCampus === 'All' ? '全校舎合計' : selectedCampus}
-                                            </h3>
+                                            <div className="flex justify-between items-center mb-4">
+                                                <h3 className="text-lg font-bold text-slate-800">
+                                                    予実管理推移 (売上)
+                                                </h3>
+                                                <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                                                    {selectedCampus === 'All' ? '全校舎' : selectedCampus} / {viewModeLabel}
+                                                </span>
+                                            </div>
                                             <ResponsiveContainer width="100%" height="100%">
                                                 <ComposedChart data={displayData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -377,7 +489,12 @@
                                 {/* Students View */}
                                 {activeTab === 'students' && (
                                     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[500px] animate-in fade-in duration-500">
-                                        <h3 className="text-lg font-bold text-slate-800 mb-6">生徒数増減フロー - {selectedCampus === 'All' ? '全校舎合計' : selectedCampus}</h3>
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h3 className="text-lg font-bold text-slate-800">生徒数増減フロー</h3>
+                                            <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                                                {selectedCampus === 'All' ? '全校舎' : selectedCampus} / {viewModeLabel}
+                                            </span>
+                                        </div>
                                         <ResponsiveContainer width="100%" height="100%">
                                             <BarChart data={displayData} stackOffset="sign" margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
@@ -395,7 +512,12 @@
                                 {/* Marketing View */}
                                 {activeTab === 'marketing' && (
                                     <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[500px] animate-in fade-in duration-500">
-                                        <h3 className="text-lg font-bold text-slate-800 mb-6">集客ファネル - {selectedCampus === 'All' ? '全校舎合計' : selectedCampus}</h3>
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h3 className="text-lg font-bold text-slate-800">集客ファネル</h3>
+                                            <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                                                {selectedCampus === 'All' ? '全校舎' : selectedCampus} / {viewModeLabel}
+                                            </span>
+                                        </div>
                                         <ResponsiveContainer width="100%" height="100%">
                                             <ComposedChart data={displayData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
                                                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
