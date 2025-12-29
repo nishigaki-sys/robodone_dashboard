@@ -165,8 +165,6 @@
             
             const [isLoading, setIsLoading] = useState(true);
             const [errorMsg, setErrorMsg] = useState(null);
-            
-            // 修正: lastUpdatedステートの定義を追加
             const [lastUpdated, setLastUpdated] = useState(null);
 
             // 現在選択されている校舎名（表示用）
@@ -201,7 +199,6 @@
                         fetchDashboardData(campuses);
                     } else {
                         console.log("No campuses found in Firebase.");
-                        // 初回はデフォルト等はセットせず空にする
                         setCampusList([]); 
                         fetchDashboardData([]); 
                     }
@@ -254,17 +251,31 @@
             const generateAllCampusesData = (targetCampuses, realEnrollmentList) => {
                 const dataMap = {};
 
-                // リアル入会データの集計準備 (Key: "校舎名_月インデックス")
-                // ※ GASからは校舎名(name)が来るので、名前でマッチングする
-                const enrollmentCountsByName = {};
-                if (realEnrollmentList && realEnrollmentList.length > 0) {
+                // ■ リアル入会データの集計 (校舎・月・日ごとにカウント)
+                // 構造: counts[校舎名][月Idx] = { total: 0, days: { 1: 0, 2: 0, ... } }
+                const counts = {};
+                const hasRealData = realEnrollmentList && realEnrollmentList.length > 0;
+
+                if (hasRealData) {
                     realEnrollmentList.forEach(item => {
                         const dateObj = new Date(item.date);
                         if (!isNaN(dateObj)) {
-                            const monthIdx = (dateObj.getMonth() + 9) % 12;
-                            // 校舎名でキーを作成
-                            const key = `${item.campus}_${monthIdx}`;
-                            enrollmentCountsByName[key] = (enrollmentCountsByName[key] || 0) + 1;
+                            // 校舎名でマッチング (GASからは名前が来るため)
+                            const campusName = item.campus; 
+                            
+                            // 4月始まりインデックス (4月=0, ..., 3月=11)
+                            const monthIdx = (dateObj.getMonth() + 9) % 12; 
+                            const day = dateObj.getDate(); // 1-31
+
+                            if (!counts[campusName]) counts[campusName] = {};
+                            if (!counts[campusName][monthIdx]) counts[campusName][monthIdx] = { total: 0, days: {} };
+                            
+                            // 月次合計を加算
+                            counts[campusName][monthIdx].total++;
+                            
+                            // 日次カウントを加算
+                            if (!counts[campusName][monthIdx].days[day]) counts[campusName][monthIdx].days[day] = 0;
+                            counts[campusName][monthIdx].days[day]++;
                         }
                     });
                 }
@@ -285,33 +296,64 @@
                         const monthlyActual = Math.floor(monthlyBudget * (0.85 + Math.random() * 0.3));
                         const monthlyFlyers = Math.floor(1000 * scale * seasonality);
                         
-                        // リアルデータの反映 (名前で検索)
-                        const realCountKey = `${campusName}_${idx}`;
-                        const hasRealData = realEnrollmentList.length > 0;
-                        const monthlyEnrollments = hasRealData 
-                            ? (enrollmentCountsByName[realCountKey] || 0) 
-                            : Math.floor(10 * scale * seasonality * 0.8);
+                        // ■ 入会数の決定
+                        let monthlyEnrollments = 0;
+                        let dailyEnrollmentMap = {}; // { 1: count, 2: count ... }
+
+                        if (hasRealData) {
+                            // リアルデータモード: 集計結果があれば使用、なければ0
+                            // (校舎名で検索)
+                            if (counts[campusName] && counts[campusName][idx]) {
+                                monthlyEnrollments = counts[campusName][idx].total;
+                                dailyEnrollmentMap = counts[campusName][idx].days;
+                            }
+                        } else {
+                            // モックモード
+                            monthlyEnrollments = Math.floor(10 * scale * seasonality * 0.8);
+                        }
 
                         const monthlyWithdrawals = Math.floor(Math.random() * 2);
 
+                        // ■ 日次データ生成
                         const daily = Array.from({ length: 30 }, (_, dIdx) => {
+                            const dayNum = dIdx + 1;
+                            // リアルデータがあれば日次マップから取得、なければモック(0)
+                            // ※ユーザー要望により、データ連携時は「1行1件」として扱うため、マップにない日は0件とする
+                            const dayEnrollments = hasRealData ? (dailyEnrollmentMap[dayNum] || 0) : 0;
+
                             return {
-                                name: `${dIdx + 1}日`,
+                                name: `${dayNum}日`,
                                 budgetRevenue: Math.floor(monthlyBudget / 30),
                                 actualRevenue: Math.floor(monthlyActual / 30),
-                                newEnrollments: 0, 
+                                newEnrollments: dayEnrollments, // ★ここを正確に反映
                                 withdrawals: 0,
                                 flyers: Math.floor(monthlyFlyers / 30),
                                 totalStudents: currentStudents 
                             };
                         });
 
+                        // ■ 週次データ生成
                         const weekly = Array.from({ length: 4 }, (_, wIdx) => {
+                            // 第1週(1-7), 第2週(8-14), 第3週(15-21), 第4週(22-月末)
+                            const startDay = wIdx * 7 + 1;
+                            const endDay = wIdx === 3 ? 31 : (wIdx + 1) * 7;
+                            
+                            let weekEnrollments = 0;
+                            // daily配列から該当期間を集計
+                            for (let i = startDay - 1; i < endDay && i < 30; i++) {
+                                weekEnrollments += daily[i].newEnrollments;
+                            }
+
+                            // モックモード時のみ簡易按分
+                            if (!hasRealData) {
+                                weekEnrollments = Math.floor(monthlyEnrollments / 4);
+                            }
+
                              return {
                                 name: `第${wIdx + 1}週`,
                                 budgetRevenue: Math.floor(monthlyBudget / 4),
                                 actualRevenue: Math.floor(monthlyActual / 4),
-                                newEnrollments: Math.floor(monthlyEnrollments / 4), 
+                                newEnrollments: weekEnrollments, // ★日次集計の結果を反映
                                 withdrawals: 0, 
                                 flyers: Math.floor(monthlyFlyers / 4),
                                 enrollmentRate: "60.0",
@@ -344,8 +386,14 @@
                         name: month,
                         budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0,
                         totalStudents: 0, flyers: 0, trialLessons: 0, graduates: 0,
-                        daily: [], weekly: []
+                        daily: Array.from({ length: 30 }, (_, i) => ({ 
+                            name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0, flyers: 0 
+                        })),
+                        weekly: Array.from({ length: 4 }, (_, i) => ({ 
+                            name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0, flyers: 0 
+                        }))
                     };
+
                     targetCampuses.forEach(campusObj => {
                         const d = dataMap[campusObj.id]?.[idx];
                         if (d) {
@@ -357,6 +405,25 @@
                             combined.flyers += d.flyers;
                             combined.trialLessons += d.trialLessons;
                             combined.graduates += d.graduates;
+
+                            // 日次合算
+                            d.daily.forEach((day, dayIdx) => {
+                                if (combined.daily[dayIdx]) {
+                                    combined.daily[dayIdx].actualRevenue += day.actualRevenue;
+                                    combined.daily[dayIdx].budgetRevenue += day.budgetRevenue;
+                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments; // ★
+                                    combined.daily[dayIdx].flyers += day.flyers;
+                                }
+                            });
+                            // 週次合算
+                            d.weekly.forEach((week, weekIdx) => {
+                                if (combined.weekly[weekIdx]) {
+                                    combined.weekly[weekIdx].actualRevenue += week.actualRevenue;
+                                    combined.weekly[weekIdx].budgetRevenue += week.budgetRevenue;
+                                    combined.weekly[weekIdx].newEnrollments += week.newEnrollments; // ★
+                                    combined.weekly[weekIdx].flyers += week.flyers;
+                                }
+                            });
                         }
                     });
                     combined.enrollmentRate = combined.trialLessons > 0 ? ((combined.newEnrollments / combined.trialLessons) * 100).toFixed(1) : "0.0";
@@ -387,7 +454,6 @@
                     return;
                 }
 
-                // ID重複チェック（ローカルStateのみで簡易チェック、厳密にはFirestoreトランザクションが必要だが今回は省略）
                 if (campusList.some(c => c.id === id)) {
                     alert("エラー: その校舎IDは既に使用されています。");
                     return;
@@ -395,7 +461,6 @@
                 
                 if (isFirebaseInitialized && db) {
                     try {
-                        // ドキュメントIDを校舎IDにする
                         await setDoc(doc(db, "campuses", id), { 
                             id: id,
                             name: name, 
@@ -405,7 +470,6 @@
                         setNewCampusName("");
                     } catch (e) { alert("Error: " + e.message); }
                 } else {
-                    // ローカルモード
                     const updatedList = [...campusList, { id, name }];
                     setCampusList(updatedList);
                     setNewCampusId("");
@@ -424,7 +488,6 @@
                         if (selectedCampusId === targetId) setSelectedCampusId('All');
                     } catch (e) { alert("Error: " + e.message); }
                 } else {
-                    // ローカルモード
                     const updatedList = campusList.filter(c => c.id !== targetId);
                     setCampusList(updatedList);
                     if (selectedCampusId === targetId) setSelectedCampusId('All');
