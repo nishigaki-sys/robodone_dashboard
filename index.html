@@ -542,13 +542,14 @@
 
             // 表示用集計
             const totals = useMemo(() => {
-                if (!displayData || displayData.length === 0) return { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, newEnrollments: 0 };
+                if (!displayData || displayData.length === 0) return { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, newEnrollments: 0, withdrawals: 0 };
                 return displayData.reduce((acc, curr) => ({
                     budgetRevenue: acc.budgetRevenue + curr.budgetRevenue,
                     actualRevenue: acc.actualRevenue + curr.actualRevenue,
                     trialLessons: acc.trialLessons + (curr.trialLessons || 0),
                     newEnrollments: acc.newEnrollments + (curr.newEnrollments || 0),
-                }), { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, newEnrollments: 0 });
+                    withdrawals: acc.withdrawals + (curr.withdrawals || 0),
+                }), { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, newEnrollments: 0, withdrawals: 0 });
             }, [displayData]);
 
             const revenueAchievement = totals.budgetRevenue > 0 ? Math.round((totals.actualRevenue / totals.budgetRevenue) * 100) : 0;
@@ -837,24 +838,70 @@
 
                                 {/* Students View */}
                                 {activeTab === 'students' && (
-                                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[500px] animate-in fade-in duration-500">
-                                        <div className="flex justify-between items-center mb-6">
-                                            <h3 className="text-lg font-bold text-slate-800">生徒数増減フロー</h3>
-                                            <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-                                                {selectedCampusName} / {viewModeLabel}
-                                            </span>
+                                    <div className="space-y-6 animate-in fade-in duration-500">
+                                        {/* 生徒数KPIカード */}
+                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                                            <StatCard title="期間内 入会数" value={`${totals.newEnrollments}名`} subValue="新規獲得" trend={0} icon={Users} color="bg-emerald-500" />
+                                            <StatCard title="期間内 退会数" value={`${totals.withdrawals}名`} subValue="退会者" trend={0} icon={Users} color="bg-rose-500" />
+                                            <StatCard title="期間内 純増数" value={`${totals.newEnrollments - totals.withdrawals > 0 ? '+' : ''}${totals.newEnrollments - totals.withdrawals}名`} subValue="入会 - 退会" trend={0} icon={TrendingUp} color="bg-blue-500" />
+                                            <StatCard title="期末/月末 在籍数" value={`${currentTotalStudents}名`} subValue="累計生徒数" trend={0} icon={School} color="bg-indigo-500" />
                                         </div>
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <BarChart data={displayData} stackOffset="sign" margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                <XAxis dataKey="name" />
-                                                <YAxis />
-                                                <Tooltip />
-                                                <Legend />
-                                                <Bar dataKey="newEnrollments" name="入会 (Forms)" fill="#10b981" stackId="stack" />
-                                                <Bar dataKey="withdrawals" name="退会" fill="#ef4444" stackId="stack" />
-                                            </BarChart>
-                                        </ResponsiveContainer>
+
+                                        {/* グラフ */}
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[400px]">
+                                            <div className="flex justify-between items-center mb-6">
+                                                <h3 className="text-lg font-bold text-slate-800">生徒数増減フロー</h3>
+                                                <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                                                    {selectedCampusName} / {viewModeLabel}
+                                                </span>
+                                            </div>
+                                            <ResponsiveContainer width="100%" height="100%">
+                                                <BarChart data={displayData} stackOffset="sign" margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                                    <XAxis dataKey="name" />
+                                                    <YAxis />
+                                                    <Tooltip />
+                                                    <Legend />
+                                                    <Bar dataKey="newEnrollments" name="入会" fill="#10b981" stackId="stack" />
+                                                    <Bar dataKey="withdrawals" name="退会" fill="#ef4444" stackId="stack" />
+                                                </BarChart>
+                                            </ResponsiveContainer>
+                                        </div>
+
+                                        {/* 詳細テーブル */}
+                                        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
+                                            <div className="p-6 border-b border-slate-100">
+                                                <h3 className="text-lg font-bold text-slate-800">生徒数推移詳細</h3>
+                                            </div>
+                                            <div className="overflow-x-auto">
+                                                <table className="w-full text-sm text-left">
+                                                    <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
+                                                        <tr>
+                                                            <th className="px-6 py-4">期間</th>
+                                                            <th className="px-6 py-4 text-emerald-600">入会数</th>
+                                                            <th className="px-6 py-4 text-rose-600">退会数</th>
+                                                            <th className="px-6 py-4">純増減</th>
+                                                            <th className="px-6 py-4 font-bold">在籍生徒数</th>
+                                                        </tr>
+                                                    </thead>
+                                                    <tbody className="divide-y divide-slate-100">
+                                                        {displayData.map((row, i) => (
+                                                            <tr key={i} className="hover:bg-slate-50 transition-colors">
+                                                                <td className="px-6 py-4 font-medium text-slate-900">{row.name}</td>
+                                                                <td className="px-6 py-4">{row.newEnrollments}</td>
+                                                                <td className="px-6 py-4">{row.withdrawals}</td>
+                                                                <td className="px-6 py-4">
+                                                                    <span className={`${row.newEnrollments - row.withdrawals >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                                                                        {row.newEnrollments - row.withdrawals > 0 ? '+' : ''}{row.newEnrollments - row.withdrawals}
+                                                                    </span>
+                                                                </td>
+                                                                <td className="px-6 py-4 font-bold">{row.totalStudents}</td>
+                                                            </tr>
+                                                        ))}
+                                                    </tbody>
+                                                </table>
+                                            </div>
+                                        </div>
                                     </div>
                                 )}
                                 
