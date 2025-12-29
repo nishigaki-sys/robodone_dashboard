@@ -169,13 +169,20 @@
 
         // メインコンポーネント
         function RobotSchoolDashboard() {
+            // 初期値設定: 現在の日時から年度と月を算出
+            const today = new Date();
+            // 4月始まりの年度計算 (1-3月は前年扱い)
+            const currentFiscalYear = today.getMonth() < 3 ? today.getFullYear() - 1 : today.getFullYear();
+            const currentMonthStr = `${today.getMonth() + 1}月`;
+
             const [activeTab, setActiveTab] = useState('summary');
             // 選択中の校舎ID ('All' または campus.id)
             const [selectedCampusId, setSelectedCampusId] = useState('All'); 
-            const [viewMode, setViewMode] = useState('annual'); 
-            const [selectedMonth, setSelectedMonth] = useState('4月');
-            // 追加: 選択中の年度
-            const [selectedYear, setSelectedYear] = useState(2024);
+            
+            // デフォルトを月次表示、当年度、当月に設定
+            const [viewMode, setViewMode] = useState('monthly'); 
+            const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
+            const [selectedYear, setSelectedYear] = useState(currentFiscalYear);
 
             // 校舎管理用ステート
             const [campusList, setCampusList] = useState(DEFAULT_CAMPUS_LIST);
