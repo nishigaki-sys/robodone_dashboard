@@ -88,6 +88,9 @@
         ];
 
         const MONTHS_LIST = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
+        
+        // 追加: 年度リスト
+        const YEARS_LIST = [2023, 2024, 2025, 2026];
 
         // ==========================================
         // Firebase 初期化ラッパー
@@ -116,6 +119,13 @@
             if (isNaN(date.getTime())) return -1;
             const month = date.getMonth(); // 0-11
             return (month + 9) % 12; // 4月=0, 3月=11
+        };
+
+        // 追加: 日付から年度（4月始まり）を取得する関数
+        const getFiscalYear = (date) => {
+            if (isNaN(date.getTime())) return -1;
+            // 1月~3月なら前年、4月~12月なら当年
+            return date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
         };
         
         const formatYen = (val) => `¥${val.toLocaleString()}`;
@@ -149,6 +159,8 @@
             const [selectedCampusId, setSelectedCampusId] = useState('All'); 
             const [viewMode, setViewMode] = useState('annual'); 
             const [selectedMonth, setSelectedMonth] = useState('4月');
+            // 追加: 選択中の年度
+            const [selectedYear, setSelectedYear] = useState(2024);
 
             // 校舎管理用ステート
             const [campusList, setCampusList] = useState(DEFAULT_CAMPUS_LIST);
@@ -232,24 +244,24 @@
             }, []);
 
             // ----------------------------------------------------------------
-            // データ生成・集計ロジック
+            // データ生成・集計ロジック (年度変更時も再計算)
             // ----------------------------------------------------------------
             useEffect(() => {
                 const generateData = async () => {
                     setIsLoading(true);
                     await new Promise(resolve => setTimeout(resolve, 300)); 
-                    const map = generateAllCampusesData(campusList, realEnrollments);
+                    const map = generateAllCampusesData(campusList, realEnrollments, selectedYear);
                     setRawDataMap(map);
                     setIsLoading(false);
                 };
                 generateData();
-            }, [campusList, realEnrollments]);
+            }, [campusList, realEnrollments, selectedYear]);
 
 
             // ----------------------------------------------------------------
             // モックデータ生成 + リアルデータのマージ
             // ----------------------------------------------------------------
-            const generateAllCampusesData = (targetCampuses, realEnrollmentList) => {
+            const generateAllCampusesData = (targetCampuses, realEnrollmentList, targetYear) => {
                 const dataMap = {};
 
                 // ■ マッピングテーブル作成 (スプシ上の名前 -> 校舎ID)
@@ -269,6 +281,10 @@
                     realEnrollmentList.forEach(item => {
                         const dateObj = new Date(item.date);
                         if (!isNaN(dateObj)) {
+                            // 修正: 年度フィルタリング
+                            const fiscalYear = getFiscalYear(dateObj);
+                            if (fiscalYear !== targetYear) return; // 選択年度以外のデータは無視
+
                             // スプシの校舎名から校舎IDへ変換
                             const rawSheetName = item.campus;
                             const campusId = sheetNameToIdMap[rawSheetName];
@@ -296,7 +312,8 @@
                 targetCampuses.forEach(campusObj => {
                     const campusId = campusObj.id;
                     const seed = campusId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                    const scale = 0.5 + (seed % 10) / 10; 
+                    // 年度によって少し乱数を変える（モックデータの単調化防止）
+                    const scale = (0.5 + (seed % 10) / 10) * (1 + (targetYear % 5) * 0.05); 
                     let currentStudents = Math.floor(50 * scale);
 
                     dataMap[campusId] = MONTHS_LIST.map((month, idx) => {
@@ -312,6 +329,7 @@
 
                         if (hasRealData) {
                             // リアルデータモード: IDでマッチングした集計結果を使用
+                            // 該当年度・校舎のデータがあれば反映、なければ0
                             if (counts[campusId] && counts[campusId][idx]) {
                                 monthlyEnrollments = counts[campusId][idx].total;
                                 dailyEnrollmentMap = counts[campusId][idx].days;
@@ -438,7 +456,8 @@
             const fetchDashboardData = async (currentList = campusList) => {
                 setIsLoading(true);
                 await new Promise(resolve => setTimeout(resolve, 500));
-                const generatedMap = generateAllCampusesData(currentList, realEnrollments);
+                // 引数に selectedYear を渡す
+                const generatedMap = generateAllCampusesData(currentList, realEnrollments, selectedYear);
                 setRawDataMap(generatedMap);
                 setLastUpdated(new Date());
                 setIsLoading(false);
@@ -590,6 +609,10 @@
                                 <MapPin className="w-3 h-3 mr-1" />
                                 {selectedCampusName}
                             </div>
+                            <div className="flex items-center">
+                                <Calendar className="w-3 h-3 mr-1" />
+                                {selectedYear}年度
+                            </div>
                         </div>
                     </aside>
 
@@ -620,6 +643,18 @@
                             <div className="flex items-center space-x-3">
                                 {activeTab !== 'settings' && (
                                     <>
+                                        {/* 年度切り替え */}
+                                        <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200">
+                                            <span className="text-xs text-slate-500 mr-2 font-bold">年度</span>
+                                            <select 
+                                                value={selectedYear} 
+                                                onChange={(e) => setSelectedYear(Number(e.target.value))} 
+                                                className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1"
+                                            >
+                                                {YEARS_LIST.map(y => <option key={y} value={y}>{y}年度</option>)}
+                                            </select>
+                                        </div>
+
                                         <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
                                             <button onClick={() => setViewMode('annual')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'annual' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>年度</button>
                                             <button onClick={() => setViewMode('monthly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>月度</button>
