@@ -131,7 +131,8 @@
         const formatYen = (val) => `¥${val.toLocaleString()}`;
 
         // UIコンポーネント: カード
-        const StatCard = ({ title, value, subValue, trend, icon: Icon, color }) => (
+        // 修正: details (内訳) を表示できるように拡張
+        const StatCard = ({ title, value, subValue, trend, icon: Icon, color, details }) => (
             <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
                 <div className="flex justify-between items-start">
                     <div>
@@ -144,11 +145,25 @@
                 </div>
                 <div className="mt-4 flex items-center text-sm">
                     <span className={`flex items-center font-medium ${trend >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {trend >= 0 ? <ArrowUpRight className="w-4 h-4 mr-1" /> : <ArrowDownRight className="w-4 h-4 mr-1" />}
-                        {Math.abs(trend)}%
+                        {trend !== 0 && (trend >= 0 ? <ArrowUpRight className="w-4 h-4 mr-1" /> : <ArrowDownRight className="w-4 h-4 mr-1" />)}
+                        {trend !== 0 ? `${Math.abs(trend)}%` : '-'}
                     </span>
                     <span className="text-slate-400 ml-2">{subValue}</span>
                 </div>
+                
+                {/* 内訳詳細エリア */}
+                {details && details.length > 0 && (
+                    <div className="mt-4 pt-3 border-t border-slate-100">
+                        <div className="space-y-1">
+                            {details.map((item, idx) => (
+                                <div key={idx} className="flex justify-between text-xs text-slate-500">
+                                    <span>{item.label}</span>
+                                    <span className="font-medium text-slate-700">{item.value}名</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
         );
 
@@ -169,7 +184,7 @@
             const [newCampusSheetName, setNewCampusSheetName] = useState(""); // 新規: スプシ連携用名
             const [isSyncing, setIsSyncing] = useState(false);
 
-            // リアルタイムデータ
+            // リアルタイム入会データ
             const [realEnrollments, setRealEnrollments] = useState([]);
             const [realStatusChanges, setRealStatusChanges] = useState([]); // 退会・休会など
 
@@ -926,12 +941,50 @@
                                 {/* Students View */}
                                 {activeTab === 'students' && (
                                     <div className="space-y-6 animate-in fade-in duration-500">
-                                        {/* 生徒数KPIカード */}
+                                        {/* 生徒数KPIカード (修正: 内訳表示を追加) */}
                                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                            <StatCard title="期間内 入会・復会" value={`${totals.newEnrollments + totals.returns}名`} subValue="新規・復帰" trend={0} icon={Users} color="bg-emerald-500" />
-                                            <StatCard title="期間内 退会・卒業他" value={`${totals.withdrawals + totals.graduates + totals.recesses + totals.transfers}名`} subValue="減少数" trend={0} icon={Users} color="bg-rose-500" />
-                                            <StatCard title="期間内 純増数" value={`${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers)}名`} subValue="純増減" trend={0} icon={TrendingUp} color="bg-blue-500" />
-                                            <StatCard title="期末/月末 在籍数" value={`${currentTotalStudents}名`} subValue="累計生徒数" trend={0} icon={School} color="bg-indigo-500" />
+                                            <StatCard 
+                                                title="期間内 増加数" 
+                                                value={`${totals.newEnrollments + totals.returns}名`} 
+                                                subValue="入会 + 復会" 
+                                                trend={0} 
+                                                icon={Users} 
+                                                color="bg-emerald-500"
+                                                details={[
+                                                    { label: '新規入会', value: totals.newEnrollments },
+                                                    { label: '復会', value: totals.returns }
+                                                ]}
+                                            />
+                                            <StatCard 
+                                                title="期間内 減少数" 
+                                                value={`${totals.withdrawals + totals.graduates + totals.recesses + totals.transfers}名`} 
+                                                subValue="退会 + 休会 + 卒業 + 転校" 
+                                                trend={0} 
+                                                icon={Users} 
+                                                color="bg-rose-500" 
+                                                details={[
+                                                    { label: '退会', value: totals.withdrawals },
+                                                    { label: '休会', value: totals.recesses },
+                                                    { label: '卒業', value: totals.graduates },
+                                                    { label: '転校', value: totals.transfers }
+                                                ]}
+                                            />
+                                            <StatCard 
+                                                title="期間内 純増数" 
+                                                value={`${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers)}名`} 
+                                                subValue="増加 - 減少" 
+                                                trend={0} 
+                                                icon={TrendingUp} 
+                                                color="bg-blue-500" 
+                                            />
+                                            <StatCard 
+                                                title="期末/月末 在籍数" 
+                                                value={`${currentTotalStudents}名`} 
+                                                subValue="累計生徒数" 
+                                                trend={0} 
+                                                icon={School} 
+                                                color="bg-indigo-500" 
+                                            />
                                         </div>
 
                                         {/* グラフ */}
