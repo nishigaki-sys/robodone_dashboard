@@ -45,7 +45,7 @@
             LayoutDashboard, Users, Megaphone, TrendingUp, Calendar, 
             ArrowUpRight, ArrowDownRight, DollarSign, Activity, Filter, 
             Download, RefreshCw, Loader2, AlertCircle, CheckCircle, ShieldCheck, MapPin, Layers,
-            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key
+            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key, Link2
         } from "lucide-react";
         
         // Firebase Imports
@@ -75,16 +75,16 @@
 
         // デフォルトの校舎リスト（ID付きオブジェクト配列に変更）
         const DEFAULT_CAMPUS_LIST = [
-            { id: 'aoyama', name: '青山本校' },
-            { id: 'shinjuku', name: '新宿校' },
-            { id: 'ikebukuro', name: '池袋校' },
-            { id: 'yokohama', name: '横浜校' },
-            { id: 'kichijoji', name: '吉祥寺校' },
-            { id: 'omiya', name: '大宮校' },
-            { id: 'chiba', name: '千葉校' },
-            { id: 'nagoya', name: '名古屋校' },
-            { id: 'osaka', name: '大阪梅田校' },
-            { id: 'fukuoka', name: '福岡天神校' }
+            { id: 'aoyama', name: '青山本校', sheetName: '青山本校' },
+            { id: 'shinjuku', name: '新宿校', sheetName: '新宿校' },
+            { id: 'ikebukuro', name: '池袋校', sheetName: '池袋校' },
+            { id: 'yokohama', name: '横浜校', sheetName: '横浜校' },
+            { id: 'kichijoji', name: '吉祥寺校', sheetName: '吉祥寺校' },
+            { id: 'omiya', name: '大宮校', sheetName: '大宮校' },
+            { id: 'chiba', name: '千葉校', sheetName: '千葉校' },
+            { id: 'nagoya', name: '名古屋校', sheetName: '名古屋校' },
+            { id: 'osaka', name: '大阪梅田校', sheetName: '大阪梅田校' },
+            { id: 'fukuoka', name: '福岡天神校', sheetName: '福岡天神校' }
         ];
 
         const MONTHS_LIST = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
@@ -154,6 +154,7 @@
             const [campusList, setCampusList] = useState(DEFAULT_CAMPUS_LIST);
             const [newCampusName, setNewCampusName] = useState("");
             const [newCampusId, setNewCampusId] = useState(""); // 新規: 校舎ID入力用
+            const [newCampusSheetName, setNewCampusSheetName] = useState(""); // 新規: スプシ連携用名
             const [isSyncing, setIsSyncing] = useState(false);
 
             // リアルタイム入会データ
@@ -185,11 +186,11 @@
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const campuses = [];
                     snapshot.forEach((doc) => {
-                        // ドキュメントIDを校舎IDとして使用
                         const data = doc.data();
                         campuses.push({
                             id: doc.id,
-                            name: data.name || doc.id
+                            name: data.name || doc.id,
+                            sheetName: data.sheetName || data.name || doc.id // スプシ連携名（後方互換）
                         });
                     });
                     
@@ -251,8 +252,16 @@
             const generateAllCampusesData = (targetCampuses, realEnrollmentList) => {
                 const dataMap = {};
 
-                // ■ リアル入会データの集計 (校舎・月・日ごとにカウント)
-                // 構造: counts[校舎名][月Idx] = { total: 0, days: { 1: 0, 2: 0, ... } }
+                // ■ マッピングテーブル作成 (スプシ上の名前 -> 校舎ID)
+                const sheetNameToIdMap = {};
+                targetCampuses.forEach(c => {
+                    // sheetNameが設定されていればそれを、なければnameを使う
+                    const key = c.sheetName || c.name;
+                    sheetNameToIdMap[key] = c.id;
+                });
+
+                // ■ リアル入会データの集計 (校舎ID・月・日ごとにカウント)
+                // 構造: counts[校舎ID][月Idx] = { total: 0, days: { 1: 0, 2: 0, ... } }
                 const counts = {};
                 const hasRealData = realEnrollmentList && realEnrollmentList.length > 0;
 
@@ -260,31 +269,32 @@
                     realEnrollmentList.forEach(item => {
                         const dateObj = new Date(item.date);
                         if (!isNaN(dateObj)) {
-                            // 校舎名でマッチング (GASからは名前が来るため)
-                            const campusName = item.campus; 
+                            // スプシの校舎名から校舎IDへ変換
+                            const rawSheetName = item.campus;
+                            const campusId = sheetNameToIdMap[rawSheetName];
                             
-                            // 4月始まりインデックス (4月=0, ..., 3月=11)
-                            const monthIdx = (dateObj.getMonth() + 9) % 12; 
-                            const day = dateObj.getDate(); // 1-31
+                            // マッチするIDがあれば集計
+                            if (campusId) {
+                                // 4月始まりインデックス (4月=0, ..., 3月=11)
+                                const monthIdx = (dateObj.getMonth() + 9) % 12; 
+                                const day = dateObj.getDate(); // 1-31
 
-                            if (!counts[campusName]) counts[campusName] = {};
-                            if (!counts[campusName][monthIdx]) counts[campusName][monthIdx] = { total: 0, days: {} };
-                            
-                            // 月次合計を加算
-                            counts[campusName][monthIdx].total++;
-                            
-                            // 日次カウントを加算
-                            if (!counts[campusName][monthIdx].days[day]) counts[campusName][monthIdx].days[day] = 0;
-                            counts[campusName][monthIdx].days[day]++;
+                                if (!counts[campusId]) counts[campusId] = {};
+                                if (!counts[campusId][monthIdx]) counts[campusId][monthIdx] = { total: 0, days: {} };
+                                
+                                // 月次合計を加算
+                                counts[campusId][monthIdx].total++;
+                                
+                                // 日次カウントを加算
+                                if (!counts[campusId][monthIdx].days[day]) counts[campusId][monthIdx].days[day] = 0;
+                                counts[campusId][monthIdx].days[day]++;
+                            }
                         }
                     });
                 }
 
                 targetCampuses.forEach(campusObj => {
-                    // mapのキーはIDを使用
                     const campusId = campusObj.id;
-                    const campusName = campusObj.name;
-
                     const seed = campusId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
                     const scale = 0.5 + (seed % 10) / 10; 
                     let currentStudents = Math.floor(50 * scale);
@@ -298,14 +308,13 @@
                         
                         // ■ 入会数の決定
                         let monthlyEnrollments = 0;
-                        let dailyEnrollmentMap = {}; // { 1: count, 2: count ... }
+                        let dailyEnrollmentMap = {}; 
 
                         if (hasRealData) {
-                            // リアルデータモード: 集計結果があれば使用、なければ0
-                            // (校舎名で検索)
-                            if (counts[campusName] && counts[campusName][idx]) {
-                                monthlyEnrollments = counts[campusName][idx].total;
-                                dailyEnrollmentMap = counts[campusName][idx].days;
+                            // リアルデータモード: IDでマッチングした集計結果を使用
+                            if (counts[campusId] && counts[campusId][idx]) {
+                                monthlyEnrollments = counts[campusId][idx].total;
+                                dailyEnrollmentMap = counts[campusId][idx].days;
                             }
                         } else {
                             // モックモード
@@ -317,15 +326,13 @@
                         // ■ 日次データ生成
                         const daily = Array.from({ length: 30 }, (_, dIdx) => {
                             const dayNum = dIdx + 1;
-                            // リアルデータがあれば日次マップから取得、なければモック(0)
-                            // ※ユーザー要望により、データ連携時は「1行1件」として扱うため、マップにない日は0件とする
                             const dayEnrollments = hasRealData ? (dailyEnrollmentMap[dayNum] || 0) : 0;
 
                             return {
                                 name: `${dayNum}日`,
                                 budgetRevenue: Math.floor(monthlyBudget / 30),
                                 actualRevenue: Math.floor(monthlyActual / 30),
-                                newEnrollments: dayEnrollments, // ★ここを正確に反映
+                                newEnrollments: dayEnrollments, 
                                 withdrawals: 0,
                                 flyers: Math.floor(monthlyFlyers / 30),
                                 totalStudents: currentStudents 
@@ -334,17 +341,14 @@
 
                         // ■ 週次データ生成
                         const weekly = Array.from({ length: 4 }, (_, wIdx) => {
-                            // 第1週(1-7), 第2週(8-14), 第3週(15-21), 第4週(22-月末)
                             const startDay = wIdx * 7 + 1;
                             const endDay = wIdx === 3 ? 31 : (wIdx + 1) * 7;
                             
                             let weekEnrollments = 0;
-                            // daily配列から該当期間を集計
                             for (let i = startDay - 1; i < endDay && i < 30; i++) {
                                 weekEnrollments += daily[i].newEnrollments;
                             }
 
-                            // モックモード時のみ簡易按分
                             if (!hasRealData) {
                                 weekEnrollments = Math.floor(monthlyEnrollments / 4);
                             }
@@ -353,7 +357,7 @@
                                 name: `第${wIdx + 1}週`,
                                 budgetRevenue: Math.floor(monthlyBudget / 4),
                                 actualRevenue: Math.floor(monthlyActual / 4),
-                                newEnrollments: weekEnrollments, // ★日次集計の結果を反映
+                                newEnrollments: weekEnrollments, 
                                 withdrawals: 0, 
                                 flyers: Math.floor(monthlyFlyers / 4),
                                 enrollmentRate: "60.0",
@@ -406,21 +410,19 @@
                             combined.trialLessons += d.trialLessons;
                             combined.graduates += d.graduates;
 
-                            // 日次合算
                             d.daily.forEach((day, dayIdx) => {
                                 if (combined.daily[dayIdx]) {
                                     combined.daily[dayIdx].actualRevenue += day.actualRevenue;
                                     combined.daily[dayIdx].budgetRevenue += day.budgetRevenue;
-                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments; // ★
+                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments; 
                                     combined.daily[dayIdx].flyers += day.flyers;
                                 }
                             });
-                            // 週次合算
                             d.weekly.forEach((week, weekIdx) => {
                                 if (combined.weekly[weekIdx]) {
                                     combined.weekly[weekIdx].actualRevenue += week.actualRevenue;
                                     combined.weekly[weekIdx].budgetRevenue += week.budgetRevenue;
-                                    combined.weekly[weekIdx].newEnrollments += week.newEnrollments; // ★
+                                    combined.weekly[weekIdx].newEnrollments += week.newEnrollments; 
                                     combined.weekly[weekIdx].flyers += week.flyers;
                                 }
                             });
@@ -443,11 +445,12 @@
             };
 
             // ----------------------------------------------------------------
-            // 校舎操作 (Firestore連携) - ID対応
+            // 校舎操作 (Firestore連携) - ID対応 + スプシ連携
             // ----------------------------------------------------------------
             const handleAddCampus = async () => {
                 const id = newCampusId.trim();
                 const name = newCampusName.trim();
+                const sheetName = newCampusSheetName.trim() || name; // 未入力なら校舎名をそのまま使う
                 
                 if (!id || !name) {
                     alert("校舎IDと校舎名の両方を入力してください。");
@@ -464,16 +467,19 @@
                         await setDoc(doc(db, "campuses", id), { 
                             id: id,
                             name: name, 
+                            sheetName: sheetName,
                             createdAt: serverTimestamp() 
                         });
                         setNewCampusId("");
                         setNewCampusName("");
+                        setNewCampusSheetName("");
                     } catch (e) { alert("Error: " + e.message); }
                 } else {
-                    const updatedList = [...campusList, { id, name }];
+                    const updatedList = [...campusList, { id, name, sheetName }];
                     setCampusList(updatedList);
                     setNewCampusId("");
                     setNewCampusName("");
+                    setNewCampusSheetName("");
                     fetchDashboardData(updatedList);
                     alert(`${name} (ID: ${id}) を登録しました (ローカルのみ)`);
                 }
@@ -659,8 +665,8 @@
                                             </h2>
                                             
                                             <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8 items-end">
-                                                <div className="md:col-span-2">
-                                                    <label className="block text-sm font-medium text-slate-700 mb-2">校舎ID <span className="text-xs text-red-500">(必須・英数推奨)</span></label>
+                                                <div className="md:col-span-1">
+                                                    <label className="block text-sm font-medium text-slate-700 mb-2">校舎ID <span className="text-xs text-red-500">*英数</span></label>
                                                     <div className="relative">
                                                         <Key className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
                                                         <input 
@@ -672,7 +678,7 @@
                                                         />
                                                     </div>
                                                 </div>
-                                                <div className="md:col-span-2">
+                                                <div className="md:col-span-1">
                                                     <label className="block text-sm font-medium text-slate-700 mb-2">校舎名</label>
                                                     <input 
                                                         type="text" 
@@ -681,6 +687,22 @@
                                                         placeholder="例: 渋谷校" 
                                                         className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
                                                     />
+                                                </div>
+                                                <div className="md:col-span-2">
+                                                    <label className="block text-sm font-medium text-slate-700 mb-2">
+                                                        スプレッドシート上の表記 (M列)
+                                                        <span className="text-xs text-slate-400 font-normal ml-2">※未入力時は校舎名と同じ</span>
+                                                    </label>
+                                                    <div className="relative">
+                                                        <FileSpreadsheet className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
+                                                        <input 
+                                                            type="text" 
+                                                            value={newCampusSheetName}
+                                                            onChange={(e) => setNewCampusSheetName(e.target.value)}
+                                                            placeholder="例: 渋谷校" 
+                                                            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
+                                                        />
+                                                    </div>
                                                 </div>
                                                 <div className="md:col-span-1">
                                                     <button 
@@ -698,23 +720,29 @@
                                                 <h3 className="text-sm font-bold text-slate-500 mb-4 uppercase tracking-wider">登録済み校舎一覧 ({campusList.length}校)</h3>
                                                 <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                                                     {campusList.map((campus) => (
-                                                        <div key={campus.id} className="flex items-center justify-between p-4 bg-slate-50 rounded-lg border border-slate-200 group hover:border-blue-200 hover:bg-blue-50/30 transition-all">
-                                                            <div className="flex items-center overflow-hidden">
-                                                                <div className="w-8 h-8 flex-shrink-0 rounded-full bg-white border border-slate-200 flex items-center justify-center mr-3 text-slate-500 font-bold text-xs">
-                                                                    {campus.name.charAt(0)}
+                                                        <div key={campus.id} className="flex flex-col justify-between p-4 bg-slate-50 rounded-lg border border-slate-200 group hover:border-blue-200 hover:bg-blue-50/30 transition-all">
+                                                            <div className="flex items-start justify-between mb-2">
+                                                                <div className="flex items-center overflow-hidden">
+                                                                    <div className="w-8 h-8 flex-shrink-0 rounded-full bg-white border border-slate-200 flex items-center justify-center mr-3 text-slate-500 font-bold text-xs">
+                                                                        {campus.name.charAt(0)}
+                                                                    </div>
+                                                                    <div className="overflow-hidden">
+                                                                        <div className="font-medium text-slate-700 truncate">{campus.name}</div>
+                                                                        <div className="text-xs text-slate-400 font-mono">ID: {campus.id}</div>
+                                                                    </div>
                                                                 </div>
-                                                                <div className="overflow-hidden">
-                                                                    <div className="font-medium text-slate-700 truncate">{campus.name}</div>
-                                                                    <div className="text-xs text-slate-400 font-mono">ID: {campus.id}</div>
-                                                                </div>
+                                                                <button 
+                                                                    onClick={() => handleDeleteCampus(campus.id, campus.name)}
+                                                                    className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
+                                                                    title="削除"
+                                                                >
+                                                                    <Trash2 className="w-4 h-4" />
+                                                                </button>
                                                             </div>
-                                                            <button 
-                                                                onClick={() => handleDeleteCampus(campus.id, campus.name)}
-                                                                className="text-slate-400 hover:text-red-600 p-2 rounded-full hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                                                                title="削除"
-                                                            >
-                                                                <Trash2 className="w-4 h-4" />
-                                                            </button>
+                                                            <div className="text-xs text-slate-500 bg-white p-2 rounded border border-slate-100 flex items-center">
+                                                                <Link2 className="w-3 h-3 mr-1 text-emerald-500 flex-shrink-0" />
+                                                                <span className="truncate">連携名: {campus.sheetName || campus.name}</span>
+                                                            </div>
                                                         </div>
                                                     ))}
                                                 </div>
@@ -728,7 +756,7 @@
                                                 </h3>
                                                 <div className="bg-slate-50 p-4 rounded-lg text-sm text-slate-600 space-y-2">
                                                     <p>Googleフォームと連携したスプレッドシートにGASを設定することで、入会申込を自動的にこのダッシュボードに反映できます。</p>
-                                                    <p className="text-xs text-slate-400">※ 入会データとの紐付けは「校舎名」で行われます。フォームの選択肢と「校舎名」を一致させてください。</p>
+                                                    <p className="text-xs text-slate-400">※ 入会データとの紐付けは「連携名（スプレッドシート上の表記）」で行われます。フォームの選択肢と一致させてください。</p>
                                                     <div className="flex items-center mt-2">
                                                         <span className="font-semibold mr-2">現在の同期データ数:</span>
                                                         <span className="bg-white px-2 py-0.5 rounded border border-slate-200 font-mono">{realEnrollments.length} 件</span>
