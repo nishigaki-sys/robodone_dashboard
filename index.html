@@ -169,8 +169,9 @@
             const [newCampusSheetName, setNewCampusSheetName] = useState(""); // 新規: スプシ連携用名
             const [isSyncing, setIsSyncing] = useState(false);
 
-            // リアルタイム入会データ
+            // リアルタイムデータ
             const [realEnrollments, setRealEnrollments] = useState([]);
+            const [realStatusChanges, setRealStatusChanges] = useState([]); // 退会・休会など
 
             // データ状態管理
             const [rawDataMap, setRawDataMap] = useState(null); 
@@ -209,17 +210,14 @@
                     console.log("Synced campuses:", campuses);
                     if (campuses.length > 0) {
                         setCampusList(campuses);
-                        fetchDashboardData(campuses);
                     } else {
                         console.log("No campuses found in Firebase.");
                         setCampusList([]); 
-                        fetchDashboardData([]); 
                     }
                     setIsSyncing(false);
                 }, (error) => {
                     console.error("Campus sync error:", error);
                     setIsSyncing(false);
-                    fetchDashboardData(DEFAULT_CAMPUS_LIST);
                 });
                 return () => unsubscribe();
             }, []);
@@ -235,10 +233,29 @@
                         id: doc.id,
                         ...doc.data()
                     }));
-                    console.log("Synced enrollments from GAS:", enrollmentData);
+                    console.log("Synced enrollments:", enrollmentData.length);
                     setRealEnrollments(enrollmentData);
                 }, (error) => {
                     console.error("Enrollment sync error:", error);
+                });
+                return () => unsubscribe();
+            }, []);
+
+            // ----------------------------------------------------------------
+            // 3. 退会・休会・復会データの同期 (Status Changes)
+            // ----------------------------------------------------------------
+            useEffect(() => {
+                if (!isFirebaseInitialized || !db) return;
+                const q = query(collection(db, "status_changes"));
+                const unsubscribe = onSnapshot(q, (snapshot) => {
+                    const statusData = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    console.log("Synced status changes:", statusData.length);
+                    setRealStatusChanges(statusData);
+                }, (error) => {
+                    console.error("Status changes sync error:", error);
                 });
                 return () => unsubscribe();
             }, []);
@@ -250,18 +267,18 @@
                 const generateData = async () => {
                     setIsLoading(true);
                     await new Promise(resolve => setTimeout(resolve, 300)); 
-                    const map = generateAllCampusesData(campusList, realEnrollments, selectedYear);
+                    const map = generateAllCampusesData(campusList, realEnrollments, realStatusChanges, selectedYear);
                     setRawDataMap(map);
                     setIsLoading(false);
                 };
                 generateData();
-            }, [campusList, realEnrollments, selectedYear]);
+            }, [campusList, realEnrollments, realStatusChanges, selectedYear]);
 
 
             // ----------------------------------------------------------------
             // モックデータ生成 + リアルデータのマージ
             // ----------------------------------------------------------------
-            const generateAllCampusesData = (targetCampuses, realEnrollmentList, targetYear) => {
+            const generateAllCampusesData = (targetCampuses, realEnrollmentList, realStatusList, targetYear) => {
                 const dataMap = {};
 
                 // ■ マッピングテーブル作成 (スプシ上の名前 -> 校舎ID)
@@ -272,47 +289,56 @@
                     sheetNameToIdMap[key] = c.id;
                 });
 
-                // ■ リアル入会データの集計 (校舎ID・月・日ごとにカウント)
-                // 構造: counts[校舎ID][月Idx] = { total: 0, days: { 1: 0, 2: 0, ... } }
-                const counts = {};
-                const hasRealData = realEnrollmentList && realEnrollmentList.length > 0;
+                // ■ 集計用ヘルパー関数
+                const countEvents = (list, typeFilter = null) => {
+                    // counts[校舎ID][月Idx] = { total: 0, days: { 1: 0, ... } }
+                    const counts = {};
+                    if (!list) return counts;
 
-                if (hasRealData) {
-                    realEnrollmentList.forEach(item => {
+                    list.forEach(item => {
                         const dateObj = new Date(item.date);
-                        if (!isNaN(dateObj)) {
-                            // 修正: 年度フィルタリング
-                            const fiscalYear = getFiscalYear(dateObj);
-                            if (fiscalYear !== targetYear) return; // 選択年度以外のデータは無視
+                        if (isNaN(dateObj)) return;
+                        
+                        // 年度チェック
+                        if (getFiscalYear(dateObj) !== targetYear) return;
 
-                            // スプシの校舎名から校舎IDへ変換
-                            const rawSheetName = item.campus;
-                            const campusId = sheetNameToIdMap[rawSheetName];
-                            
-                            // マッチするIDがあれば集計
-                            if (campusId) {
-                                // 4月始まりインデックス (4月=0, ..., 3月=11)
-                                const monthIdx = (dateObj.getMonth() + 9) % 12; 
-                                const day = dateObj.getDate(); // 1-31
-
-                                if (!counts[campusId]) counts[campusId] = {};
-                                if (!counts[campusId][monthIdx]) counts[campusId][monthIdx] = { total: 0, days: {} };
-                                
-                                // 月次合計を加算
-                                counts[campusId][monthIdx].total++;
-                                
-                                // 日次カウントを加算
-                                if (!counts[campusId][monthIdx].days[day]) counts[campusId][monthIdx].days[day] = 0;
-                                counts[campusId][monthIdx].days[day]++;
-                            }
+                        // 種別チェック (status_changes用)
+                        if (typeFilter) {
+                            if (!item.type || !item.type.includes(typeFilter)) return;
                         }
+
+                        // 校舎ID特定
+                        const rawSheetName = item.campus;
+                        const campusId = sheetNameToIdMap[rawSheetName];
+                        if (!campusId) return;
+
+                        const monthIdx = (dateObj.getMonth() + 9) % 12; 
+                        const day = dateObj.getDate();
+
+                        if (!counts[campusId]) counts[campusId] = {};
+                        if (!counts[campusId][monthIdx]) counts[campusId][monthIdx] = { total: 0, days: {} };
+                        
+                        counts[campusId][monthIdx].total++;
+                        if (!counts[campusId][monthIdx].days[day]) counts[campusId][monthIdx].days[day] = 0;
+                        counts[campusId][monthIdx].days[day]++;
                     });
-                }
+                    return counts;
+                };
+
+                // 各種データの集計実行
+                const enrollmentCounts = countEvents(realEnrollmentList);
+                const withdrawalCounts = countEvents(realStatusList, "退会");
+                const recessCounts = countEvents(realStatusList, "休会");
+                const returnCounts = countEvents(realStatusList, "復会");
+                const transferCounts = countEvents(realStatusList, "転校"); // 転出
+                const graduateCounts = countEvents(realStatusList, "卒業");
+
+                const hasRealData = realEnrollmentList.length > 0 || realStatusList.length > 0;
 
                 targetCampuses.forEach(campusObj => {
                     const campusId = campusObj.id;
+                    // 初期生徒数（年度初め）: 簡易計算
                     const seed = campusId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-                    // 年度によって少し乱数を変える（モックデータの単調化防止）
                     const scale = (0.5 + (seed % 10) / 10) * (1 + (targetYear % 5) * 0.05); 
                     let currentStudents = Math.floor(50 * scale);
 
@@ -323,35 +349,52 @@
                         const monthlyActual = Math.floor(monthlyBudget * (0.85 + Math.random() * 0.3));
                         const monthlyFlyers = Math.floor(1000 * scale * seasonality);
                         
-                        // ■ 入会数の決定
-                        let monthlyEnrollments = 0;
-                        let dailyEnrollmentMap = {}; 
+                        // ■ 各種実績値の取得
+                        const getCount = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].total : 0;
+                        const getDays = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].days : {};
+
+                        let val = {
+                            enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0
+                        };
 
                         if (hasRealData) {
-                            // リアルデータモード: IDでマッチングした集計結果を使用
-                            // 該当年度・校舎のデータがあれば反映、なければ0
-                            if (counts[campusId] && counts[campusId][idx]) {
-                                monthlyEnrollments = counts[campusId][idx].total;
-                                dailyEnrollmentMap = counts[campusId][idx].days;
-                            }
+                            val.enroll = getCount(enrollmentCounts);
+                            val.withdraw = getCount(withdrawalCounts);
+                            val.recess = getCount(recessCounts);
+                            val.return = getCount(returnCounts);
+                            val.transfer = getCount(transferCounts);
+                            val.graduate = getCount(graduateCounts);
                         } else {
                             // モックモード
-                            monthlyEnrollments = Math.floor(10 * scale * seasonality * 0.8);
+                            val.enroll = Math.floor(10 * scale * seasonality * 0.8);
+                            val.withdraw = Math.floor(Math.random() * 2);
+                            // 他は0とする
                         }
-
-                        const monthlyWithdrawals = Math.floor(Math.random() * 2);
 
                         // ■ 日次データ生成
                         const daily = Array.from({ length: 30 }, (_, dIdx) => {
                             const dayNum = dIdx + 1;
-                            const dayEnrollments = hasRealData ? (dailyEnrollmentMap[dayNum] || 0) : 0;
+                            
+                            const getDayCount = (daysObj) => (daysObj[dayNum] || 0);
+                            
+                            // リアルデータがあれば日次マップから取得
+                            const dEnroll = hasRealData ? getDayCount(getDays(enrollmentCounts)) : 0;
+                            const dWithdraw = hasRealData ? getDayCount(getDays(withdrawalCounts)) : 0;
+                            const dRecess = hasRealData ? getDayCount(getDays(recessCounts)) : 0;
+                            const dReturn = hasRealData ? getDayCount(getDays(returnCounts)) : 0;
+                            const dTransfer = hasRealData ? getDayCount(getDays(transferCounts)) : 0;
+                            const dGraduate = hasRealData ? getDayCount(getDays(graduateCounts)) : 0;
 
                             return {
                                 name: `${dayNum}日`,
                                 budgetRevenue: Math.floor(monthlyBudget / 30),
                                 actualRevenue: Math.floor(monthlyActual / 30),
-                                newEnrollments: dayEnrollments, 
-                                withdrawals: 0,
+                                newEnrollments: dEnroll,
+                                withdrawals: dWithdraw,
+                                recesses: dRecess,
+                                returns: dReturn,
+                                transfers: dTransfer,
+                                graduates: dGraduate,
                                 flyers: Math.floor(monthlyFlyers / 30),
                                 totalStudents: currentStudents 
                             };
@@ -362,40 +405,56 @@
                             const startDay = wIdx * 7 + 1;
                             const endDay = wIdx === 3 ? 31 : (wIdx + 1) * 7;
                             
-                            let weekEnrollments = 0;
+                            let wVal = { enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0 };
+                            
                             for (let i = startDay - 1; i < endDay && i < 30; i++) {
-                                weekEnrollments += daily[i].newEnrollments;
+                                wVal.enroll += daily[i].newEnrollments;
+                                wVal.withdraw += daily[i].withdrawals;
+                                wVal.recess += daily[i].recesses;
+                                wVal.return += daily[i].returns;
+                                wVal.transfer += daily[i].transfers;
+                                wVal.graduate += daily[i].graduates;
                             }
 
                             if (!hasRealData) {
-                                weekEnrollments = Math.floor(monthlyEnrollments / 4);
+                                wVal.enroll = Math.floor(val.enroll / 4);
                             }
 
                              return {
                                 name: `第${wIdx + 1}週`,
                                 budgetRevenue: Math.floor(monthlyBudget / 4),
                                 actualRevenue: Math.floor(monthlyActual / 4),
-                                newEnrollments: weekEnrollments, 
-                                withdrawals: 0, 
+                                newEnrollments: wVal.enroll,
+                                withdrawals: wVal.withdraw,
+                                recesses: wVal.recess,
+                                returns: wVal.return,
+                                transfers: wVal.transfer,
+                                graduates: wVal.graduate,
                                 flyers: Math.floor(monthlyFlyers / 4),
                                 enrollmentRate: "60.0",
                                 totalStudents: currentStudents 
                             };
                         });
 
-                        currentStudents += (monthlyEnrollments - monthlyWithdrawals);
+                        // 在籍数更新: 入会 + 復会 - (退会 + 休会 + 転校 + 卒業)
+                        // ※休会をマイナスするかはポリシーによるが、一般にアクティブ数管理ならマイナス
+                        const netChange = (val.enroll + val.return) - (val.withdraw + val.recess + val.transfer + val.graduate);
+                        currentStudents += netChange;
 
                         return {
                             name: month,
                             budgetRevenue: monthlyBudget,
                             actualRevenue: monthlyActual,
-                            newEnrollments: monthlyEnrollments,
-                            withdrawals: monthlyWithdrawals,
-                            graduates: idx === 11 ? Math.floor(5 * scale) : 0,
+                            newEnrollments: val.enroll,
+                            withdrawals: val.withdraw,
+                            recesses: val.recess,
+                            returns: val.return,
+                            transfers: val.transfer,
+                            graduates: val.graduate,
                             totalStudents: currentStudents,
                             flyers: monthlyFlyers,
                             touchAndTry: Math.floor(monthlyFlyers * 0.05),
-                            trialLessons: Math.floor(monthlyEnrollments / 0.6),
+                            trialLessons: Math.floor(val.enroll / 0.6) || 0,
                             enrollmentRate: "60.0",
                             daily, weekly
                         };
@@ -406,13 +465,16 @@
                 dataMap['All'] = MONTHS_LIST.map((month, idx) => {
                     const combined = {
                         name: month,
-                        budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0,
-                        totalStudents: 0, flyers: 0, trialLessons: 0, graduates: 0,
+                        budgetRevenue: 0, actualRevenue: 0, 
+                        newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0,
+                        totalStudents: 0, flyers: 0, trialLessons: 0,
                         daily: Array.from({ length: 30 }, (_, i) => ({ 
-                            name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0, flyers: 0 
+                            name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, 
+                            newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0 
                         })),
                         weekly: Array.from({ length: 4 }, (_, i) => ({ 
-                            name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, newEnrollments: 0, withdrawals: 0, flyers: 0 
+                            name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, 
+                            newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0 
                         }))
                     };
 
@@ -423,24 +485,39 @@
                             combined.actualRevenue += d.actualRevenue;
                             combined.newEnrollments += d.newEnrollments;
                             combined.withdrawals += d.withdrawals;
+                            combined.recesses += d.recesses;
+                            combined.returns += d.returns;
+                            combined.transfers += d.transfers;
+                            combined.graduates += d.graduates;
                             combined.totalStudents += d.totalStudents;
                             combined.flyers += d.flyers;
                             combined.trialLessons += d.trialLessons;
-                            combined.graduates += d.graduates;
 
+                            // 日次合算
                             d.daily.forEach((day, dayIdx) => {
                                 if (combined.daily[dayIdx]) {
                                     combined.daily[dayIdx].actualRevenue += day.actualRevenue;
                                     combined.daily[dayIdx].budgetRevenue += day.budgetRevenue;
-                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments; 
+                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments;
+                                    combined.daily[dayIdx].withdrawals += day.withdrawals;
+                                    combined.daily[dayIdx].recesses += day.recesses;
+                                    combined.daily[dayIdx].returns += day.returns;
+                                    combined.daily[dayIdx].transfers += day.transfers;
+                                    combined.daily[dayIdx].graduates += day.graduates;
                                     combined.daily[dayIdx].flyers += day.flyers;
                                 }
                             });
+                            // 週次合算
                             d.weekly.forEach((week, weekIdx) => {
                                 if (combined.weekly[weekIdx]) {
                                     combined.weekly[weekIdx].actualRevenue += week.actualRevenue;
                                     combined.weekly[weekIdx].budgetRevenue += week.budgetRevenue;
                                     combined.weekly[weekIdx].newEnrollments += week.newEnrollments; 
+                                    combined.weekly[weekIdx].withdrawals += week.withdrawals;
+                                    combined.weekly[weekIdx].recesses += week.recesses;
+                                    combined.weekly[weekIdx].returns += week.returns;
+                                    combined.weekly[weekIdx].transfers += week.transfers;
+                                    combined.weekly[weekIdx].graduates += week.graduates;
                                     combined.weekly[weekIdx].flyers += week.flyers;
                                 }
                             });
@@ -457,7 +534,7 @@
                 setIsLoading(true);
                 await new Promise(resolve => setTimeout(resolve, 500));
                 // 引数に selectedYear を渡す
-                const generatedMap = generateAllCampusesData(currentList, realEnrollments, selectedYear);
+                const generatedMap = generateAllCampusesData(currentList, realEnrollments, realStatusChanges, selectedYear);
                 setRawDataMap(generatedMap);
                 setLastUpdated(new Date());
                 setIsLoading(false);
@@ -542,14 +619,24 @@
 
             // 表示用集計
             const totals = useMemo(() => {
-                if (!displayData || displayData.length === 0) return { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, newEnrollments: 0, withdrawals: 0 };
+                if (!displayData || displayData.length === 0) return { 
+                    budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, 
+                    newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0
+                };
                 return displayData.reduce((acc, curr) => ({
                     budgetRevenue: acc.budgetRevenue + curr.budgetRevenue,
                     actualRevenue: acc.actualRevenue + curr.actualRevenue,
                     trialLessons: acc.trialLessons + (curr.trialLessons || 0),
                     newEnrollments: acc.newEnrollments + (curr.newEnrollments || 0),
                     withdrawals: acc.withdrawals + (curr.withdrawals || 0),
-                }), { budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, newEnrollments: 0, withdrawals: 0 });
+                    recesses: acc.recesses + (curr.recesses || 0),
+                    returns: acc.returns + (curr.returns || 0),
+                    transfers: acc.transfers + (curr.transfers || 0),
+                    graduates: acc.graduates + (curr.graduates || 0),
+                }), { 
+                    budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, 
+                    newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0
+                });
             }, [displayData]);
 
             const revenueAchievement = totals.budgetRevenue > 0 ? Math.round((totals.actualRevenue / totals.budgetRevenue) * 100) : 0;
@@ -841,9 +928,9 @@
                                     <div className="space-y-6 animate-in fade-in duration-500">
                                         {/* 生徒数KPIカード */}
                                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                            <StatCard title="期間内 入会数" value={`${totals.newEnrollments}名`} subValue="新規獲得" trend={0} icon={Users} color="bg-emerald-500" />
-                                            <StatCard title="期間内 退会数" value={`${totals.withdrawals}名`} subValue="退会者" trend={0} icon={Users} color="bg-rose-500" />
-                                            <StatCard title="期間内 純増数" value={`${totals.newEnrollments - totals.withdrawals > 0 ? '+' : ''}${totals.newEnrollments - totals.withdrawals}名`} subValue="入会 - 退会" trend={0} icon={TrendingUp} color="bg-blue-500" />
+                                            <StatCard title="期間内 入会・復会" value={`${totals.newEnrollments + totals.returns}名`} subValue="新規・復帰" trend={0} icon={Users} color="bg-emerald-500" />
+                                            <StatCard title="期間内 退会・卒業他" value={`${totals.withdrawals + totals.graduates + totals.recesses + totals.transfers}名`} subValue="減少数" trend={0} icon={Users} color="bg-rose-500" />
+                                            <StatCard title="期間内 純増数" value={`${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers)}名`} subValue="純増減" trend={0} icon={TrendingUp} color="bg-blue-500" />
                                             <StatCard title="期末/月末 在籍数" value={`${currentTotalStudents}名`} subValue="累計生徒数" trend={0} icon={School} color="bg-indigo-500" />
                                         </div>
 
@@ -862,8 +949,15 @@
                                                     <YAxis />
                                                     <Tooltip />
                                                     <Legend />
+                                                    {/* プラス要素 */}
                                                     <Bar dataKey="newEnrollments" name="入会" fill="#10b981" stackId="stack" />
+                                                    <Bar dataKey="returns" name="復会" fill="#34d399" stackId="stack" />
+                                                    
+                                                    {/* マイナス要素 */}
                                                     <Bar dataKey="withdrawals" name="退会" fill="#ef4444" stackId="stack" />
+                                                    <Bar dataKey="recesses" name="休会" fill="#f59e0b" stackId="stack" />
+                                                    <Bar dataKey="transfers" name="転校" fill="#f97316" stackId="stack" />
+                                                    <Bar dataKey="graduates" name="卒業" fill="#a855f7" stackId="stack" />
                                                 </BarChart>
                                             </ResponsiveContainer>
                                         </div>
@@ -877,25 +971,27 @@
                                                 <table className="w-full text-sm text-left">
                                                     <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
                                                         <tr>
-                                                            <th className="px-6 py-4">期間</th>
-                                                            <th className="px-6 py-4 text-emerald-600">入会数</th>
-                                                            <th className="px-6 py-4 text-rose-600">退会数</th>
-                                                            <th className="px-6 py-4">純増減</th>
-                                                            <th className="px-6 py-4 font-bold">在籍生徒数</th>
+                                                            <th className="px-4 py-3">期間</th>
+                                                            <th className="px-4 py-3 text-emerald-600 bg-emerald-50/30">入会</th>
+                                                            <th className="px-4 py-3 text-emerald-600 bg-emerald-50/30">復会</th>
+                                                            <th className="px-4 py-3 text-rose-600 bg-rose-50/30">退会</th>
+                                                            <th className="px-4 py-3 text-amber-600 bg-amber-50/30">休会</th>
+                                                            <th className="px-4 py-3 text-orange-600 bg-orange-50/30">転校</th>
+                                                            <th className="px-4 py-3 text-purple-600 bg-purple-50/30">卒業</th>
+                                                            <th className="px-4 py-3 font-bold border-l border-slate-100">在籍数</th>
                                                         </tr>
                                                     </thead>
                                                     <tbody className="divide-y divide-slate-100">
                                                         {displayData.map((row, i) => (
                                                             <tr key={i} className="hover:bg-slate-50 transition-colors">
-                                                                <td className="px-6 py-4 font-medium text-slate-900">{row.name}</td>
-                                                                <td className="px-6 py-4">{row.newEnrollments}</td>
-                                                                <td className="px-6 py-4">{row.withdrawals}</td>
-                                                                <td className="px-6 py-4">
-                                                                    <span className={`${row.newEnrollments - row.withdrawals >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                                                        {row.newEnrollments - row.withdrawals > 0 ? '+' : ''}{row.newEnrollments - row.withdrawals}
-                                                                    </span>
-                                                                </td>
-                                                                <td className="px-6 py-4 font-bold">{row.totalStudents}</td>
+                                                                <td className="px-4 py-3 font-medium text-slate-900">{row.name}</td>
+                                                                <td className="px-4 py-3 bg-emerald-50/10">{row.newEnrollments}</td>
+                                                                <td className="px-4 py-3 bg-emerald-50/10">{row.returns}</td>
+                                                                <td className="px-4 py-3 bg-rose-50/10">{row.withdrawals}</td>
+                                                                <td className="px-4 py-3 bg-amber-50/10">{row.recesses}</td>
+                                                                <td className="px-4 py-3 bg-orange-50/10">{row.transfers}</td>
+                                                                <td className="px-4 py-3 bg-purple-50/10">{row.graduates}</td>
+                                                                <td className="px-4 py-3 font-bold border-l border-slate-100">{row.totalStudents}</td>
                                                             </tr>
                                                         ))}
                                                     </tbody>
