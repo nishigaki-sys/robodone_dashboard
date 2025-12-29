@@ -58,12 +58,12 @@
         
         // ★★★ ここにFirebaseプロジェクトの設定を貼り付けてください ★★★
         const FIREBASE_CONFIG = {
-                      apiKey: "AIzaSyCsgMN0SWCC1SvCDIakYBejTWlxwBmiwJk",
-                      authDomain: "robodone-dashboard.firebaseapp.com",
-                      projectId: "robodone-dashboard",
-                      storageBucket: "robodone-dashboard.firebasestorage.app",
-                      messagingSenderId: "457095919160",
-                      appId: "1:457095919160:web:1716af87290b63733598cd"
+            apiKey: "YOUR_FIREBASE_API_KEY",
+            authDomain: "YOUR_PROJECT_ID.firebaseapp.com",
+            projectId: "YOUR_PROJECT_ID",
+            storageBucket: "YOUR_PROJECT_ID.appspot.com",
+            messagingSenderId: "SENDER_ID",
+            appId: "APP_ID"
         };
 
         const CONFIG = {
@@ -153,11 +153,13 @@
             
             const [isLoading, setIsLoading] = useState(true);
             const [lastUpdated, setLastUpdated] = useState(null);
+            const [errorMsg, setErrorMsg] = useState(null);
 
             // ----------------------------------------------------------------
             // Firebase リアルタイム同期 (校舎リスト)
             // ----------------------------------------------------------------
             useEffect(() => {
+                // Firebase未設定の場合は何もしない（後続のEffectで初期データロード）
                 if (!isFirebaseInitialized || !db) return;
 
                 setIsSyncing(true);
@@ -170,19 +172,24 @@
                         campuses.push(doc.data().name);
                     });
                     
+                    console.log("Synced campuses from Firebase:", campuses);
+                    
                     if (campuses.length > 0) {
-                        console.log("Synced campuses from Firebase:", campuses);
                         setCampusList(campuses);
-                        // リスト更新時にデータも再生成
                         fetchDashboardData(campuses);
                     } else {
-                        // 初回や空の場合はデフォルトデータを投入するロジックを入れても良いが
-                        // ここでは手動追加を待つ
-                        // setCampusList([]); 
+                        // データが空の場合（初回など）はデフォルトリストは使わず空リストで初期化
+                        // （ただしスタック回避のためローディングは解除する）
+                        console.log("No campuses found in Firebase.");
+                        setCampusList([]); 
+                        fetchDashboardData([]); 
                     }
                     setIsSyncing(false);
                 }, (error) => {
                     console.error("Firebase sync error:", error);
+                    setErrorMsg("Firebase接続エラー: ローカルデータで起動します。");
+                    // ★ エラー時はデフォルトデータで強制的に画面を表示する
+                    fetchDashboardData(DEFAULT_CAMPUS_LIST);
                     setIsSyncing(false);
                 });
 
@@ -322,7 +329,6 @@
             const fetchDashboardData = async (currentList = campusList) => {
                 setIsLoading(true);
                 // データ生成（Firebase接続時はFirestoreのリストを基に生成、未接続時はローカルリスト）
-                // 実際にはFirestoreに実績データがある場合はそれをFetchするロジックになる
                 await new Promise(resolve => setTimeout(resolve, 500));
                 
                 const generatedMap = generateAllCampusesData(currentList);
@@ -349,7 +355,7 @@
                         // onSnapshotが検知してStateを更新する
                     } catch (e) {
                         console.error("Error adding document: ", e);
-                        alert("エラー: Firebaseへの保存に失敗しました。権限などを確認してください。");
+                        alert("エラー: Firebaseへの保存に失敗しました。権限などを確認してください。\n" + e.message);
                     }
                 } else {
                     // ローカルモード
@@ -376,7 +382,7 @@
                         // onSnapshotが検知してStateを更新する
                     } catch (e) {
                         console.error("Error deleting document: ", e);
-                        alert("エラー: 削除に失敗しました。");
+                        alert("エラー: 削除に失敗しました。権限などを確認してください。");
                     }
                 } else {
                     // ローカルモード
@@ -393,6 +399,8 @@
                 if (!isFirebaseInitialized) {
                     fetchDashboardData(DEFAULT_CAMPUS_LIST);
                 }
+                // Firebaseが初期化されている場合は onSnapshot のコールバック内で fetchDashboardData が呼ばれるが、
+                // 万が一権限エラーなどで onSnapshot がコケた場合も上でハンドリングしている
             }, []);
 
             // 校舎・モード・月変更時のデータ反映
@@ -495,6 +503,20 @@
 
                     {/* Main Area */}
                     <main className="flex-1 flex flex-col overflow-hidden h-screen">
+                        {errorMsg && (
+                            <div className="bg-red-50 border-l-4 border-red-500 p-4 m-4 mb-0 flex justify-between items-center">
+                                <div className="flex">
+                                    <div className="flex-shrink-0">
+                                        <AlertCircle className="h-5 w-5 text-red-500" />
+                                    </div>
+                                    <div className="ml-3">
+                                        <p className="text-sm text-red-700">{errorMsg}</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setErrorMsg(null)} className="text-red-500 hover:text-red-700 font-bold">×</button>
+                            </div>
+                        )}
+                        
                         <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 sticky top-0 z-10 shrink-0">
                             <h1 className="text-xl font-bold text-slate-800">
                                 {activeTab === 'summary' && '経営サマリー'}
