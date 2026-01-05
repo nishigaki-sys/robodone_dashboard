@@ -75,6 +75,7 @@
 
         // デフォルトの校舎リスト（ID付きオブジェクト配列に変更）
         const DEFAULT_CAMPUS_LIST = [
+            { id: 'toyota', name: '豊田本店', sheetName: '豊田本店' },
             { id: 'aoyama', name: '青山本校', sheetName: '青山本校' },
             { id: 'shinjuku', name: '新宿校', sheetName: '新宿校' },
             { id: 'ikebukuro', name: '池袋校', sheetName: '池袋校' },
@@ -376,7 +377,7 @@
                         const getDays = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].days : {};
 
                         let val = {
-                            enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0
+                            enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0, transferIn: 0
                         };
 
                         if (hasRealData) {
@@ -384,8 +385,9 @@
                             val.withdraw = getCount(withdrawalCounts);
                             val.recess = getCount(recessCounts);
                             val.return = getCount(returnCounts);
-                            val.transfer = getCount(transferCounts);
+                            val.transfer = getCount(transferCounts); // 転出
                             val.graduate = getCount(graduateCounts);
+                            // 転入データがあればここで取得 (現状はソースがないため0)
                         } else {
                             // モックモード
                             val.enroll = Math.floor(10 * scale * seasonality * 0.8);
@@ -462,10 +464,10 @@
                         });
 
                         // 在籍数更新ロジック修正
-                        // ※ 休会と復会は在籍数に影響を与えない
-                        // 計算式: 入会 + (転入) - 退会 - 転出 - 卒業
-                        // ※ 今回転入(TransferIn)はデータソースに含まれていないため 0 とする
-                        const netChange = val.enroll - val.withdraw - val.transfer - val.graduate;
+                        // 指定計算式: 前月末在籍数 ＋ 入会数 ＋ 転入 － 退会数 － 転出
+                        // ※ 休会・復会は含めない
+                        // ※ 卒業は指定式に含まれていないため除外 (必要なら - val.graduate を追加してください)
+                        const netChange = val.enroll + val.transferIn - val.withdraw - val.transfer;
                         currentStudents += netChange;
 
                         return {
@@ -957,33 +959,33 @@
                                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                                             <StatCard 
                                                 title="期間内 増加数" 
-                                                value={`${totals.newEnrollments}名`} 
-                                                subValue="入会 (復会除く)" 
+                                                value={`${totals.newEnrollments + totals.returns}名`} 
+                                                subValue="入会 + 復会" 
                                                 trend={0} 
                                                 icon={Users} 
                                                 color="bg-emerald-500"
                                                 details={[
                                                     { label: '新規入会', value: totals.newEnrollments },
-                                                    { label: '復会 (計算外)', value: totals.returns }
+                                                    { label: '復会', value: totals.returns }
                                                 ]}
                                             />
                                             <StatCard 
                                                 title="期間内 減少数" 
-                                                value={`${totals.withdrawals + totals.graduates + totals.transfers}名`} 
-                                                subValue="退会 + 卒業 + 転校" 
+                                                value={`${totals.withdrawals + totals.graduates + totals.recesses + totals.transfers}名`} 
+                                                subValue="退会 + 休会 + 卒業 + 転校" 
                                                 trend={0} 
                                                 icon={Users} 
                                                 color="bg-rose-500" 
                                                 details={[
                                                     { label: '退会', value: totals.withdrawals },
-                                                    { label: '休会 (計算外)', value: totals.recesses },
+                                                    { label: '休会', value: totals.recesses },
                                                     { label: '卒業', value: totals.graduates },
                                                     { label: '転校', value: totals.transfers }
                                                 ]}
                                             />
                                             <StatCard 
                                                 title="期間内 純増数" 
-                                                value={`${(totals.newEnrollments) - (totals.withdrawals + totals.graduates + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments) - (totals.withdrawals + totals.graduates + totals.transfers)}名`} 
+                                                value={`${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers)}名`} 
                                                 subValue="増加 - 減少" 
                                                 trend={0} 
                                                 icon={TrendingUp} 
