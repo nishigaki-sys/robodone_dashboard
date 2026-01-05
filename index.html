@@ -461,9 +461,11 @@
                             };
                         });
 
-                        // 在籍数更新: 入会 + 復会 - (退会 + 休会 + 転校 + 卒業)
-                        // ※休会をマイナスするかはポリシーによるが、一般にアクティブ数管理ならマイナス
-                        const netChange = (val.enroll + val.return) - (val.withdraw + val.recess + val.transfer + val.graduate);
+                        // 在籍数更新ロジック修正
+                        // ※ 休会と復会は在籍数に影響を与えない
+                        // 計算式: 入会 + (転入) - 退会 - 転出 - 卒業
+                        // ※ 今回転入(TransferIn)はデータソースに含まれていないため 0 とする
+                        const netChange = val.enroll - val.withdraw - val.transfer - val.graduate;
                         currentStudents += netChange;
 
                         return {
@@ -955,33 +957,33 @@
                                         <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                                             <StatCard 
                                                 title="期間内 増加数" 
-                                                value={`${totals.newEnrollments + totals.returns}名`} 
-                                                subValue="入会 + 復会" 
+                                                value={`${totals.newEnrollments}名`} 
+                                                subValue="入会 (復会除く)" 
                                                 trend={0} 
                                                 icon={Users} 
                                                 color="bg-emerald-500"
                                                 details={[
                                                     { label: '新規入会', value: totals.newEnrollments },
-                                                    { label: '復会', value: totals.returns }
+                                                    { label: '復会 (計算外)', value: totals.returns }
                                                 ]}
                                             />
                                             <StatCard 
                                                 title="期間内 減少数" 
-                                                value={`${totals.withdrawals + totals.graduates + totals.recesses + totals.transfers}名`} 
-                                                subValue="退会 + 休会 + 卒業 + 転校" 
+                                                value={`${totals.withdrawals + totals.graduates + totals.transfers}名`} 
+                                                subValue="退会 + 卒業 + 転校" 
                                                 trend={0} 
                                                 icon={Users} 
                                                 color="bg-rose-500" 
                                                 details={[
                                                     { label: '退会', value: totals.withdrawals },
-                                                    { label: '休会', value: totals.recesses },
+                                                    { label: '休会 (計算外)', value: totals.recesses },
                                                     { label: '卒業', value: totals.graduates },
                                                     { label: '転校', value: totals.transfers }
                                                 ]}
                                             />
                                             <StatCard 
                                                 title="期間内 純増数" 
-                                                value={`${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers)}名`} 
+                                                value={`${(totals.newEnrollments) - (totals.withdrawals + totals.graduates + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments) - (totals.withdrawals + totals.graduates + totals.transfers)}名`} 
                                                 subValue="増加 - 減少" 
                                                 trend={0} 
                                                 icon={TrendingUp} 
