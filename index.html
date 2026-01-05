@@ -45,7 +45,8 @@
             LayoutDashboard, Users, Megaphone, TrendingUp, Calendar, 
             ArrowUpRight, ArrowDownRight, DollarSign, Activity, Filter, 
             Download, RefreshCw, Loader2, AlertCircle, CheckCircle, ShieldCheck, MapPin, Layers,
-            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key, Link2, FileText, Save
+            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key, Link2, FileText, Save,
+            Sun, Cloud, CloudRain, Snowflake, PenTool
         } from "lucide-react";
         
         // Firebase Imports
@@ -118,6 +119,14 @@
                 return acc;
             }, {});
         };
+        
+        // 日付フォーマット YYYY-MM-DD
+        const formatDate = (date) => {
+            const y = date.getFullYear();
+            const m = ('0' + (date.getMonth() + 1)).slice(-2);
+            const d = ('0' + date.getDate()).slice(-2);
+            return `${y}-${m}-${d}`;
+        };
 
         // UIコンポーネント: カード
         const StatCard = ({ title, value, subValue, trend, icon: Icon, color, details }) => (
@@ -180,10 +189,21 @@
             const [planData, setPlanData] = useState(createInitialPlanData());
             const [isSavingPlan, setIsSavingPlan] = useState(false);
 
+            // 日報管理用ステート
+            const [reportDate, setReportDate] = useState(formatDate(new Date()));
+            const [dailyReport, setDailyReport] = useState({
+                weather: 'sunny',
+                touchTry: 0,
+                flyers: 0,
+                trialLessons: 0
+            });
+            const [isSavingReport, setIsSavingReport] = useState(false);
+
             // リアルタイムデータ
             const [realEnrollments, setRealEnrollments] = useState([]);
             const [realStatusChanges, setRealStatusChanges] = useState([]);
             const [realTransfers, setRealTransfers] = useState([]); 
+            const [realDailyReports, setRealDailyReports] = useState([]); // 日報データ
 
             // データ状態管理
             const [rawDataMap, setRawDataMap] = useState(null); 
@@ -227,38 +247,36 @@
             }, []);
 
             // ----------------------------------------------------------------
-            // 2-4. 各種実績データの同期
+            // 2-5. 各種実績データの同期 (日報含む)
             // ----------------------------------------------------------------
             useEffect(() => {
                 if (!isFirebaseInitialized || !db) return;
                 const unsubEnroll = onSnapshot(query(collection(db, "enrollments")), (snap) => setRealEnrollments(snap.docs.map(d => ({id:d.id, ...d.data()}))));
                 const unsubStatus = onSnapshot(query(collection(db, "status_changes")), (snap) => setRealStatusChanges(snap.docs.map(d => ({id:d.id, ...d.data()}))));
                 const unsubTransfer = onSnapshot(query(collection(db, "transfers")), (snap) => setRealTransfers(snap.docs.map(d => ({id:d.id, ...d.data()}))));
+                const unsubReports = onSnapshot(query(collection(db, "daily_reports")), (snap) => setRealDailyReports(snap.docs.map(d => ({id:d.id, ...d.data()}))));
                 
-                return () => { unsubEnroll(); unsubStatus(); unsubTransfer(); };
+                return () => { unsubEnroll(); unsubStatus(); unsubTransfer(); unsubReports(); };
             }, []);
 
             // ----------------------------------------------------------------
-            // 5. 計画データの取得 (校舎・年度変更時)
+            // 計画データの取得 (校舎・年度変更時)
             // ----------------------------------------------------------------
             useEffect(() => {
                 const fetchPlan = async () => {
-                    if (selectedCampusId === 'All') return; // 全校舎時は取得しない（または合計ロジックが必要だが今回は編集画面なのでスキップ）
-                    
+                    if (selectedCampusId === 'All') return; 
                     if (!isFirebaseInitialized || !db) {
-                        setPlanData(createInitialPlanData()); // ローカル時は初期値
+                        setPlanData(createInitialPlanData()); 
                         return;
                     }
-
                     try {
                         const docId = `${selectedCampusId}_${selectedYear}`;
                         const docRef = doc(db, "campus_plans", docId);
                         const docSnap = await getDoc(docRef);
-
                         if (docSnap.exists()) {
                             setPlanData(docSnap.data().plans);
                         } else {
-                            setPlanData(createInitialPlanData()); // データなければ初期値
+                            setPlanData(createInitialPlanData()); 
                         }
                     } catch (e) {
                         console.error("Fetch plan error:", e);
@@ -268,23 +286,49 @@
             }, [selectedCampusId, selectedYear]);
 
             // ----------------------------------------------------------------
+            // 日報データのロード (日報入力画面用: 校舎・日付変更時)
+            // ----------------------------------------------------------------
+            useEffect(() => {
+                // 選択中の日付・校舎の日報データを realDailyReports から探してフォームにセット
+                if (selectedCampusId === 'All') return;
+
+                const targetReport = realDailyReports.find(r => r.campusId === selectedCampusId && r.date === reportDate);
+                if (targetReport) {
+                    setDailyReport({
+                        weather: targetReport.weather || 'sunny',
+                        touchTry: targetReport.touchTry || 0,
+                        flyers: targetReport.flyers || 0,
+                        trialLessons: targetReport.trialLessons || 0
+                    });
+                } else {
+                    // 新規
+                    setDailyReport({
+                        weather: 'sunny',
+                        touchTry: 0,
+                        flyers: 0,
+                        trialLessons: 0
+                    });
+                }
+            }, [reportDate, selectedCampusId, realDailyReports]);
+
+            // ----------------------------------------------------------------
             // データ生成・集計ロジックトリガー
             // ----------------------------------------------------------------
             useEffect(() => {
                 const generateData = async () => {
                     setIsLoading(true);
                     await new Promise(resolve => setTimeout(resolve, 300)); 
-                    const map = generateAllCampusesData(campusList, realEnrollments, realStatusChanges, realTransfers, selectedYear);
+                    const map = generateAllCampusesData(campusList, realEnrollments, realStatusChanges, realTransfers, realDailyReports, selectedYear);
                     setRawDataMap(map);
                     setIsLoading(false);
                 };
                 generateData();
-            }, [campusList, realEnrollments, realStatusChanges, realTransfers, selectedYear]);
+            }, [campusList, realEnrollments, realStatusChanges, realTransfers, realDailyReports, selectedYear]);
 
             // ----------------------------------------------------------------
-            // 集計ロジック (省略なし)
+            // 集計ロジック
             // ----------------------------------------------------------------
-            const generateAllCampusesData = (targetCampuses, realEnrollmentList, realStatusList, realTransferList, targetYear) => {
+            const generateAllCampusesData = (targetCampuses, realEnrollmentList, realStatusList, realTransferList, realDailyReportList, targetYear) => {
                 const dataMap = {};
                 const sheetNameToIdMap = {};
                 targetCampuses.forEach(c => {
@@ -292,6 +336,35 @@
                     sheetNameToIdMap[key] = c.id;
                 });
 
+                // ヘルパー: 日報データの集計
+                const countReports = (campusId, monthIdx) => {
+                    const result = { flyers: 0, touchTry: 0, trialLessons: 0, days: {} };
+                    if (!realDailyReportList) return result;
+
+                    realDailyReportList.forEach(report => {
+                        if (report.campusId !== campusId) return;
+                        const dateObj = new Date(report.date);
+                        if (isNaN(dateObj)) return;
+                        if (getFiscalYear(dateObj) !== targetYear) return;
+                        
+                        const mIdx = (dateObj.getMonth() + 9) % 12;
+                        if (mIdx !== monthIdx) return;
+
+                        const day = dateObj.getDate();
+                        result.flyers += (report.flyers || 0);
+                        result.touchTry += (report.touchTry || 0);
+                        result.trialLessons += (report.trialLessons || 0);
+
+                        // 日次用
+                        if (!result.days[day]) result.days[day] = { flyers: 0, touchTry: 0, trialLessons: 0 };
+                        result.days[day].flyers += (report.flyers || 0);
+                        result.days[day].touchTry += (report.touchTry || 0);
+                        result.days[day].trialLessons += (report.trialLessons || 0);
+                    });
+                    return result;
+                };
+
+                // ... (既存の入退会集計ヘルパーはそのまま使用) ...
                 const countTotalBefore = (list, year, typeFilter = null) => {
                     const counts = {}; 
                     if (!list) return counts;
@@ -362,6 +435,9 @@
                         const getCount = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].total : 0;
                         const getDays = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].days : {};
 
+                        // 日報データの集計
+                        const reportStats = countReports(campusId, idx);
+
                         let val = {
                             enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0, transferIn: 0
                         };
@@ -379,6 +455,10 @@
                         const daily = Array.from({ length: 30 }, (_, dIdx) => {
                             const dayNum = dIdx + 1;
                             const getDayCount = (daysObj) => (daysObj[dayNum] || 0);
+                            
+                            // 日報データの取得
+                            const dayReport = reportStats.days[dayNum] || { flyers: 0, touchTry: 0, trialLessons: 0 };
+
                             return {
                                 name: `${dayNum}日`,
                                 budgetRevenue: 0, actualRevenue: 0,
@@ -389,7 +469,10 @@
                                 returns: hasRealData ? getDayCount(getDays(returnCounts)) : 0,
                                 transfers: hasRealData ? getDayCount(getDays(transferCounts)) : 0,
                                 graduates: hasRealData ? getDayCount(getDays(graduateCounts)) : 0,
-                                flyers: 0,
+                                // 日報データ反映
+                                flyers: dayReport.flyers,
+                                touchAndTry: dayReport.touchTry,
+                                trialLessons: dayReport.trialLessons,
                                 totalStudents: currentStudents,
                                 withdrawals_neg: hasRealData ? -getDayCount(getDays(withdrawalCounts)) : 0,
                                 recesses_neg: hasRealData ? -getDayCount(getDays(recessCounts)) : 0,
@@ -400,6 +483,7 @@
 
                         const weekly = Array.from({ length: 4 }, (_, wIdx) => {
                             let wVal = { enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0, transferIn: 0 };
+                            let wReport = { flyers: 0, touchTry: 0, trialLessons: 0 };
                             const startDay = wIdx * 7 + 1;
                             const endDay = wIdx === 3 ? 31 : (wIdx + 1) * 7;
                             for (let i = startDay - 1; i < endDay && i < 30; i++) {
@@ -410,6 +494,10 @@
                                 wVal.return += daily[i].returns;
                                 wVal.transfer += daily[i].transfers;
                                 wVal.graduate += daily[i].graduates;
+                                // 日報データ
+                                wReport.flyers += daily[i].flyers;
+                                wReport.touchTry += daily[i].touchAndTry;
+                                wReport.trialLessons += daily[i].trialLessons;
                             }
                              return {
                                 name: `第${wIdx + 1}週`,
@@ -421,7 +509,8 @@
                                 returns: wVal.return,
                                 transfers: wVal.transfer,
                                 graduates: wVal.graduate,
-                                flyers: 0,
+                                flyers: wReport.flyers, // 反映
+                                trialLessons: wReport.trialLessons, // 反映
                                 enrollmentRate: "0.0",
                                 totalStudents: currentStudents,
                                 withdrawals_neg: -wVal.withdraw,
@@ -445,9 +534,9 @@
                             transfers: val.transfer,
                             graduates: val.graduate,
                             totalStudents: currentStudents,
-                            flyers: 0,
-                            touchAndTry: 0,
-                            trialLessons: 0, 
+                            flyers: reportStats.flyers, // 反映
+                            touchAndTry: reportStats.touchTry, // 反映
+                            trialLessons: reportStats.trialLessons, // 反映
                             enrollmentRate: "0.0",
                             withdrawals_neg: -val.withdraw,
                             recesses_neg: -val.recess,
@@ -463,16 +552,18 @@
                         name: month,
                         budgetRevenue: 0, actualRevenue: 0, 
                         newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0,
-                        totalStudents: 0, flyers: 0, trialLessons: 0,
+                        totalStudents: 0, flyers: 0, trialLessons: 0, touchAndTry: 0,
                         withdrawals_neg: 0, recesses_neg: 0, transfers_neg: 0, graduates_neg: 0,
                         daily: Array.from({ length: 30 }, (_, i) => ({ 
                             name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, 
-                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0,
+                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, 
+                            flyers: 0, trialLessons: 0, touchAndTry: 0,
                             withdrawals_neg: 0, recesses_neg: 0, transfers_neg: 0, graduates_neg: 0
                         })),
                         weekly: Array.from({ length: 4 }, (_, i) => ({ 
                             name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, 
-                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0,
+                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, 
+                            flyers: 0, trialLessons: 0, touchAndTry: 0,
                             withdrawals_neg: 0, recesses_neg: 0, transfers_neg: 0, graduates_neg: 0
                         }))
                     };
@@ -483,7 +574,6 @@
                             Object.keys(combined).forEach(key => {
                                 if (typeof combined[key] === 'number') combined[key] += d[key];
                             });
-                            // Array sum for daily/weekly (simplified)
                             d.daily.forEach((day, dayIdx) => {
                                 if (combined.daily[dayIdx]) {
                                     Object.keys(combined.daily[dayIdx]).forEach(k => {
@@ -508,7 +598,7 @@
             const fetchDashboardData = async (currentList = campusList) => {
                 setIsLoading(true);
                 await new Promise(resolve => setTimeout(resolve, 500));
-                const generatedMap = generateAllCampusesData(currentList, realEnrollments, realStatusChanges, realTransfers, selectedYear);
+                const generatedMap = generateAllCampusesData(currentList, realEnrollments, realStatusChanges, realTransfers, realDailyReports, selectedYear);
                 setRawDataMap(generatedMap);
                 setLastUpdated(new Date());
                 setIsLoading(false);
@@ -521,7 +611,6 @@
                 const sheetName = newCampusSheetName.trim() || name;
                 if (!id || !name) return alert("校舎IDと校舎名は必須です。");
                 if (campusList.some(c => c.id === id)) return alert("その校舎IDは既に使用されています。");
-                
                 if (isFirebaseInitialized && db) {
                     try {
                         await setDoc(doc(db, "campuses", id), { id: id, name: name, sheetName: sheetName, createdAt: serverTimestamp() });
@@ -545,8 +634,6 @@
                 setPlanData(prev => {
                     const newData = { ...prev };
                     newData[month] = { ...newData[month], [field]: Number(value) };
-                    
-                    // 入会率の自動計算 (Enrollments / Trials)
                     if (field === 'enrollments' || field === 'trials') {
                         const enr = field === 'enrollments' ? Number(value) : newData[month].enrollments;
                         const tri = field === 'trials' ? Number(value) : newData[month].trials;
@@ -556,25 +643,34 @@
                 });
             };
 
-            // 計画データの保存ハンドラ
             const savePlanData = async () => {
                 if (selectedCampusId === 'All') return;
                 setIsSavingPlan(true);
                 try {
                     const docId = `${selectedCampusId}_${selectedYear}`;
                     await setDoc(doc(db, "campus_plans", docId), {
-                        campusId: selectedCampusId,
-                        year: selectedYear,
-                        plans: planData,
-                        updatedAt: serverTimestamp()
+                        campusId: selectedCampusId, year: selectedYear, plans: planData, updatedAt: serverTimestamp()
                     });
                     alert("計画データを保存しました。");
-                } catch (e) {
-                    console.error("Save plan error:", e);
-                    alert("保存に失敗しました: " + e.message);
-                } finally {
-                    setIsSavingPlan(false);
-                }
+                } catch (e) { alert("保存に失敗しました: " + e.message); } 
+                finally { setIsSavingPlan(false); }
+            };
+
+            // 日報保存ハンドラ
+            const handleSaveDailyReport = async () => {
+                if (selectedCampusId === 'All') return;
+                setIsSavingReport(true);
+                try {
+                    const docId = `${selectedCampusId}_${reportDate}`;
+                    await setDoc(doc(db, "daily_reports", docId), {
+                        campusId: selectedCampusId,
+                        date: reportDate,
+                        ...dailyReport,
+                        updatedAt: serverTimestamp()
+                    });
+                    alert("日報を保存しました。");
+                } catch (e) { alert("保存に失敗しました: " + e.message); }
+                finally { setIsSavingReport(false); }
             };
 
             // 初回ロード
@@ -594,6 +690,25 @@
                     }
                 }
             }, [selectedCampusId, viewMode, selectedMonth, rawDataMap]);
+
+            // 本日の自動集計入会数を取得
+            const todayEnrollmentsCount = useMemo(() => {
+                if (!realEnrollments) return 0;
+                // sheetNameからIDへのマップ
+                const sheetNameToIdMap = {};
+                campusList.forEach(c => {
+                    const key = c.sheetName || c.name;
+                    sheetNameToIdMap[key] = c.id;
+                });
+
+                return realEnrollments.filter(e => {
+                    const d = new Date(e.date);
+                    if (isNaN(d.getTime())) return false;
+                    const dateStr = formatDate(d);
+                    const cId = sheetNameToIdMap[e.campus];
+                    return dateStr === reportDate && cId === selectedCampusId;
+                }).length;
+            }, [realEnrollments, reportDate, selectedCampusId, campusList]);
 
             // 表示用集計 (totals)
             const totals = useMemo(() => {
@@ -661,6 +776,10 @@
                                 <FileText className="w-5 h-5" />
                                 <span className="font-medium">計画管理</span>
                             </button>
+                            <button onClick={() => setActiveTab('daily_report')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'daily_report' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                                <PenTool className="w-5 h-5" />
+                                <span className="font-medium">日報管理</span>
+                            </button>
                             <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                                 <Settings className="w-5 h-5" />
                                 <span className="font-medium">校舎設定</span>
@@ -706,11 +825,12 @@
                                 {activeTab === 'students' && '生徒数・入退会管理'}
                                 {activeTab === 'marketing' && '集客活動・販促管理'}
                                 {activeTab === 'planning' && '年間計画・予算管理'}
+                                {activeTab === 'daily_report' && '日報入力'}
                                 {activeTab === 'settings' && '校舎設定・管理'}
                             </h1>
                             
                             <div className="flex items-center space-x-3">
-                                {activeTab !== 'settings' && (
+                                {activeTab !== 'settings' && activeTab !== 'daily_report' && (
                                     <>
                                         <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200">
                                             <span className="text-xs text-slate-500 mr-2 font-bold">年度</span>
@@ -753,6 +873,126 @@
 
                         <div className="flex-1 overflow-y-auto p-6">
                             <div className="max-w-7xl mx-auto space-y-6">
+                                {/* Daily Report View */}
+                                {activeTab === 'daily_report' && (
+                                    <div className="space-y-6 animate-in fade-in duration-500">
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 max-w-3xl mx-auto">
+                                            {selectedCampusId === 'All' ? (
+                                                <div className="p-8 text-center text-slate-500 bg-slate-50 rounded-lg">
+                                                    <AlertCircle className="w-10 h-10 mx-auto mb-2 text-slate-400" />
+                                                    <p>全校舎の合計画面では日報入力はできません。</p>
+                                                    <p className="text-sm mt-1">右上のドロップダウン、またはサイドバーで個別の校舎を選択してください。</p>
+                                                    <div className="mt-4 flex justify-center">
+                                                        <select 
+                                                            value={selectedCampusId} 
+                                                            onChange={(e) => setSelectedCampusId(e.target.value)} 
+                                                            className="bg-white border border-slate-300 text-slate-700 text-sm rounded-lg focus:ring-blue-500 focus:border-blue-500 block p-2.5"
+                                                        >
+                                                            <option value="All">校舎を選択...</option>
+                                                            {campusList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                            ) : (
+                                                <>
+                                                    <div className="flex justify-between items-center mb-6 pb-4 border-b border-slate-100">
+                                                        <h2 className="text-lg font-bold text-slate-800 flex items-center">
+                                                            <PenTool className="w-5 h-5 mr-2 text-blue-600" />
+                                                            {selectedCampusName} 日報入力
+                                                        </h2>
+                                                        <div className="flex items-center">
+                                                            <label className="mr-3 text-sm font-medium text-slate-600">日付:</label>
+                                                            <input 
+                                                                type="date" 
+                                                                value={reportDate} 
+                                                                onChange={(e) => setReportDate(e.target.value)}
+                                                                className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                                            />
+                                                        </div>
+                                                    </div>
+
+                                                    <div className="grid grid-cols-1 gap-6">
+                                                        {/* 天候 */}
+                                                        <div>
+                                                            <label className="block text-sm font-bold text-slate-700 mb-2">天候</label>
+                                                            <div className="flex space-x-4">
+                                                                {[
+                                                                    { id: 'sunny', label: '晴れ', icon: Sun, color: 'text-orange-500' },
+                                                                    { id: 'cloudy', label: '曇り', icon: Cloud, color: 'text-gray-500' },
+                                                                    { id: 'rainy', label: '雨', icon: CloudRain, color: 'text-blue-500' },
+                                                                    { id: 'snowy', label: '雪', icon: Snowflake, color: 'text-cyan-500' }
+                                                                ].map(w => (
+                                                                    <button
+                                                                        key={w.id}
+                                                                        onClick={() => setDailyReport({...dailyReport, weather: w.id})}
+                                                                        className={`flex items-center px-4 py-2 rounded-lg border transition-all ${dailyReport.weather === w.id ? 'bg-blue-50 border-blue-500 ring-1 ring-blue-500' : 'bg-white border-slate-200 hover:bg-slate-50'}`}
+                                                                    >
+                                                                        <w.icon className={`w-4 h-4 mr-2 ${w.color}`} />
+                                                                        <span className="text-sm">{w.label}</span>
+                                                                    </button>
+                                                                ))}
+                                                            </div>
+                                                        </div>
+
+                                                        {/* 集客活動 */}
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                            <div>
+                                                                <label className="block text-sm font-bold text-slate-700 mb-2">タッチ＆トライ数</label>
+                                                                <input 
+                                                                    type="number" min="0"
+                                                                    value={dailyReport.touchTry}
+                                                                    onChange={(e) => setDailyReport({...dailyReport, touchTry: Number(e.target.value)})}
+                                                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-sm font-bold text-slate-700 mb-2">門配数 (チラシ配布)</label>
+                                                                <input 
+                                                                    type="number" min="0"
+                                                                    value={dailyReport.flyers}
+                                                                    onChange={(e) => setDailyReport({...dailyReport, flyers: Number(e.target.value)})}
+                                                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                                />
+                                                            </div>
+                                                        </div>
+
+                                                        {/* 体験会・入会 */}
+                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                                            <div>
+                                                                <label className="block text-sm font-bold text-slate-700 mb-2">体験会 実施数</label>
+                                                                <input 
+                                                                    type="number" min="0"
+                                                                    value={dailyReport.trialLessons}
+                                                                    onChange={(e) => setDailyReport({...dailyReport, trialLessons: Number(e.target.value)})}
+                                                                    className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 outline-none"
+                                                                />
+                                                            </div>
+                                                            <div>
+                                                                <label className="block text-sm font-bold text-slate-700 mb-2">本日の入会数 (自動集計)</label>
+                                                                <div className="w-full px-4 py-2 bg-slate-100 border border-slate-200 rounded-lg text-slate-600 font-mono">
+                                                                    {todayEnrollmentsCount} 名
+                                                                </div>
+                                                                <p className="text-xs text-slate-400 mt-1">※Googleフォームからのデータ連携値</p>
+                                                            </div>
+                                                        </div>
+
+                                                        <div className="pt-4 border-t border-slate-100 flex justify-end">
+                                                            <button 
+                                                                onClick={handleSaveDailyReport}
+                                                                disabled={isSavingReport}
+                                                                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center shadow-sm disabled:opacity-50"
+                                                            >
+                                                                <Save className="w-4 h-4 mr-2" />
+                                                                {isSavingReport ? '保存中...' : '日報を保存'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
                                 {/* Planning View */}
                                 {activeTab === 'planning' && (
                                     <div className="space-y-6 animate-in fade-in duration-500">
@@ -892,7 +1132,7 @@
                                         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                                             <StatCard title="売上実績 (選択期間)" value={formatYen(0)} subValue="予算比 -" trend={0} icon={DollarSign} color="bg-blue-500" />
                                             <StatCard title="生徒数" value={`${currentTotalStudents}名`} subValue="在籍生徒数" trend={0} icon={Users} color="bg-indigo-500" />
-                                            <StatCard title="体験会 (選択期間)" value="0回" subValue="実施回数" trend={0} icon={Calendar} color="bg-amber-500" />
+                                            <StatCard title="体験会 (選択期間)" value={`${totals.trialLessons}回`} subValue="実施回数" trend={0} icon={Calendar} color="bg-amber-500" />
                                             <StatCard title="入会数" value={`${totals.newEnrollments}名`} subValue="新規獲得" trend={0} icon={Activity} color="bg-emerald-500" />
                                         </div>
                                     </div>
@@ -916,12 +1156,9 @@
                                                     <Tooltip />
                                                     <Legend />
                                                     <ReferenceLine y={0} stroke="#000" />
-                                                    {/* プラス要素 */}
                                                     <Bar dataKey="newEnrollments" name="入会" fill="#10b981" stackId="stack" />
                                                     <Bar dataKey="returns" name="復会" fill="#34d399" stackId="stack" />
                                                     <Bar dataKey="transferIns" name="転入" fill="#06b6d4" stackId="stack" />
-                                                    
-                                                    {/* マイナス要素 (データ生成時にマイナス値化) */}
                                                     <Bar dataKey="withdrawals_neg" name="退会" fill="#ef4444" stackId="stack" />
                                                     <Bar dataKey="recesses_neg" name="休会" fill="#f59e0b" stackId="stack" />
                                                     <Bar dataKey="transfers_neg" name="転校" fill="#f97316" stackId="stack" />
@@ -986,6 +1223,7 @@
                                                 <Legend />
                                                 <Bar yAxisId="left" dataKey="flyers" name="チラシ配布" fill="#94a3b8" />
                                                 <Line yAxisId="right" type="monotone" dataKey="newEnrollments" name="入会数" stroke="#10b981" strokeWidth={3} />
+                                                <Line yAxisId="right" type="monotone" dataKey="trialLessons" name="体験会数" stroke="#f59e0b" strokeWidth={3} />
                                             </ComposedChart>
                                         </ResponsiveContainer>
                                     </div>
