@@ -813,22 +813,6 @@
                                                     ))}
                                                 </div>
                                             </div>
-                                            
-                                            {/* GAS Integration Guide */}
-                                            <div className="mt-8 pt-6 border-t border-slate-100">
-                                                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center">
-                                                    <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />
-                                                    Google Sheets 連携 (自動入会同期)
-                                                </h3>
-                                                <div className="bg-slate-50 p-4 rounded-lg text-sm text-slate-600 space-y-2">
-                                                    <p>Googleフォームと連携したスプレッドシートにGASを設定することで、入会申込を自動的にこのダッシュボードに反映できます。</p>
-                                                    <p className="text-xs text-slate-400">※ 入会データとの紐付けは「連携名（スプレッドシート上の表記）」で行われます。フォームの選択肢と一致させてください。</p>
-                                                    <div className="flex items-center mt-2">
-                                                        <span className="font-semibold mr-2">現在の同期データ数:</span>
-                                                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 font-mono">{realEnrollments.length} 件</span>
-                                                    </div>
-                                                </div>
-                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -858,9 +842,10 @@
                                                 <BarChart data={displayData} stackOffset="sign">
                                                     <CartesianGrid strokeDasharray="3 3" vertical={false} />
                                                     <XAxis dataKey="name" />
-                                                    <YAxis />
+                                                    <YAxis padding={{ top: 20, bottom: 20 }} />
                                                     <Tooltip />
                                                     <Legend />
+                                                    <ReferenceLine y={0} stroke="#000" />
                                                     {/* プラス要素 */}
                                                     <Bar dataKey="newEnrollments" name="入会" fill="#10b981" stackId="stack" />
                                                     <Bar dataKey="returns" name="復会" fill="#34d399" stackId="stack" />
