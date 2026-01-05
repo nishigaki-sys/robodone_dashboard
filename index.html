@@ -39,7 +39,7 @@
         import { createRoot } from "react-dom/client";
         import { 
             BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
-            ComposedChart, AreaChart, Area, PieChart, Pie, Cell 
+            ComposedChart, AreaChart, Area, PieChart, Pie, Cell, ReferenceLine
         } from "recharts";
         import { 
             LayoutDashboard, Users, Megaphone, TrendingUp, Calendar, 
@@ -411,7 +411,12 @@
                                 transfers: dTransfer,
                                 graduates: dGraduate,
                                 flyers: 0,
-                                totalStudents: currentStudents 
+                                totalStudents: currentStudents,
+                                // グラフ表示用の負の値 (Stack用)
+                                withdrawals_neg: -dWithdraw,
+                                recesses_neg: -dRecess,
+                                transfers_neg: -dTransfer,
+                                graduates_neg: -dGraduate
                             };
                         });
 
@@ -443,7 +448,12 @@
                                 graduates: wVal.graduate,
                                 flyers: 0,
                                 enrollmentRate: "0.0",
-                                totalStudents: currentStudents 
+                                totalStudents: currentStudents,
+                                // グラフ表示用の負の値
+                                withdrawals_neg: -wVal.withdraw,
+                                recesses_neg: -wVal.recess,
+                                transfers_neg: -wVal.transfer,
+                                graduates_neg: -wVal.graduate
                             };
                         });
 
@@ -467,6 +477,11 @@
                             touchAndTry: 0,
                             trialLessons: 0, 
                             enrollmentRate: "0.0",
+                            // グラフ表示用の負の値 (月次)
+                            withdrawals_neg: -val.withdraw,
+                            recesses_neg: -val.recess,
+                            transfers_neg: -val.transfer,
+                            graduates_neg: -val.graduate,
                             daily, weekly
                         };
                     });
@@ -479,13 +494,16 @@
                         budgetRevenue: 0, actualRevenue: 0, 
                         newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0,
                         totalStudents: 0, flyers: 0, trialLessons: 0,
+                        withdrawals_neg: 0, recesses_neg: 0, transfers_neg: 0, graduates_neg: 0,
                         daily: Array.from({ length: 30 }, (_, i) => ({ 
                             name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, 
-                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0 
+                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0,
+                            withdrawals_neg: 0, recesses_neg: 0, transfers_neg: 0, graduates_neg: 0
                         })),
                         weekly: Array.from({ length: 4 }, (_, i) => ({ 
                             name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, 
-                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0 
+                            newEnrollments: 0, transferIns: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0,
+                            withdrawals_neg: 0, recesses_neg: 0, transfers_neg: 0, graduates_neg: 0
                         }))
                     };
 
@@ -505,6 +523,12 @@
                             combined.flyers += d.flyers;
                             combined.trialLessons += d.trialLessons;
 
+                            // 負の値も合算
+                            combined.withdrawals_neg += d.withdrawals_neg;
+                            combined.recesses_neg += d.recesses_neg;
+                            combined.transfers_neg += d.transfers_neg;
+                            combined.graduates_neg += d.graduates_neg;
+
                             d.daily.forEach((day, dayIdx) => {
                                 if (combined.daily[dayIdx]) {
                                     combined.daily[dayIdx].actualRevenue += day.actualRevenue;
@@ -517,6 +541,11 @@
                                     combined.daily[dayIdx].transfers += day.transfers;
                                     combined.daily[dayIdx].graduates += day.graduates;
                                     combined.daily[dayIdx].flyers += day.flyers;
+                                    // 負の値
+                                    combined.daily[dayIdx].withdrawals_neg += day.withdrawals_neg;
+                                    combined.daily[dayIdx].recesses_neg += day.recesses_neg;
+                                    combined.daily[dayIdx].transfers_neg += day.transfers_neg;
+                                    combined.daily[dayIdx].graduates_neg += day.graduates_neg;
                                 }
                             });
                             d.weekly.forEach((week, weekIdx) => {
@@ -531,6 +560,11 @@
                                     combined.weekly[weekIdx].transfers += week.transfers;
                                     combined.weekly[weekIdx].graduates += week.graduates;
                                     combined.weekly[weekIdx].flyers += week.flyers;
+                                    // 負の値
+                                    combined.weekly[weekIdx].withdrawals_neg += week.withdrawals_neg;
+                                    combined.weekly[weekIdx].recesses_neg += week.recesses_neg;
+                                    combined.weekly[weekIdx].transfers_neg += week.transfers_neg;
+                                    combined.weekly[weekIdx].graduates_neg += week.graduates_neg;
                                 }
                             });
                         }
@@ -779,6 +813,22 @@
                                                     ))}
                                                 </div>
                                             </div>
+                                            
+                                            {/* GAS Integration Guide */}
+                                            <div className="mt-8 pt-6 border-t border-slate-100">
+                                                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center">
+                                                    <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />
+                                                    Google Sheets 連携 (自動入会同期)
+                                                </h3>
+                                                <div className="bg-slate-50 p-4 rounded-lg text-sm text-slate-600 space-y-2">
+                                                    <p>Googleフォームと連携したスプレッドシートにGASを設定することで、入会申込を自動的にこのダッシュボードに反映できます。</p>
+                                                    <p className="text-xs text-slate-400">※ 入会データとの紐付けは「連携名（スプレッドシート上の表記）」で行われます。フォームの選択肢と一致させてください。</p>
+                                                    <div className="flex items-center mt-2">
+                                                        <span className="font-semibold mr-2">現在の同期データ数:</span>
+                                                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 font-mono">{realEnrollments.length} 件</span>
+                                                    </div>
+                                                </div>
+                                            </div>
                                         </div>
                                     </div>
                                 )}
@@ -811,13 +861,16 @@
                                                     <YAxis />
                                                     <Tooltip />
                                                     <Legend />
+                                                    {/* プラス要素 */}
                                                     <Bar dataKey="newEnrollments" name="入会" fill="#10b981" stackId="stack" />
                                                     <Bar dataKey="returns" name="復会" fill="#34d399" stackId="stack" />
                                                     <Bar dataKey="transferIns" name="転入" fill="#06b6d4" stackId="stack" />
-                                                    <Bar dataKey="withdrawals" name="退会" fill="#ef4444" stackId="stack" />
-                                                    <Bar dataKey="recesses" name="休会" fill="#f59e0b" stackId="stack" />
-                                                    <Bar dataKey="transfers" name="転校" fill="#f97316" stackId="stack" />
-                                                    <Bar dataKey="graduates" name="卒業" fill="#a855f7" stackId="stack" />
+                                                    
+                                                    {/* マイナス要素 (データ生成時にマイナス値化) */}
+                                                    <Bar dataKey="withdrawals_neg" name="退会" fill="#ef4444" stackId="stack" />
+                                                    <Bar dataKey="recesses_neg" name="休会" fill="#f59e0b" stackId="stack" />
+                                                    <Bar dataKey="transfers_neg" name="転校" fill="#f97316" stackId="stack" />
+                                                    <Bar dataKey="graduates_neg" name="卒業" fill="#a855f7" stackId="stack" />
                                                 </BarChart>
                                             </ResponsiveContainer>
                                         </div>
