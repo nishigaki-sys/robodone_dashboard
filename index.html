@@ -71,8 +71,8 @@
 
         const MONTHS_LIST = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
         
-        // 年度リスト
-        const YEARS_LIST = [2023, 2024, 2025, 2026];
+        // 年度リスト (2022年度を追加)
+        const YEARS_LIST = [2022, 2023, 2024, 2025, 2026];
 
         // ==========================================
         // Firebase 初期化ラッパー
@@ -509,6 +509,7 @@
                                     combined.daily[dayIdx].returns += day.returns;
                                     combined.daily[dayIdx].transfers += day.transfers;
                                     combined.daily[dayIdx].graduates += day.graduates;
+                                    combined.daily[dayIdx].flyers += day.flyers;
                                 }
                             });
                             d.weekly.forEach((week, weekIdx) => {
@@ -519,6 +520,7 @@
                                     combined.weekly[weekIdx].returns += week.returns;
                                     combined.weekly[weekIdx].transfers += week.transfers;
                                     combined.weekly[weekIdx].graduates += week.graduates;
+                                    combined.weekly[weekIdx].flyers += week.flyers;
                                 }
                             });
                         }
