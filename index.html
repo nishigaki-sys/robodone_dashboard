@@ -45,12 +45,12 @@
             LayoutDashboard, Users, Megaphone, TrendingUp, Calendar, 
             ArrowUpRight, ArrowDownRight, DollarSign, Activity, Filter, 
             Download, RefreshCw, Loader2, AlertCircle, CheckCircle, ShieldCheck, MapPin, Layers,
-            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key, Link2
+            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key, Link2, FileText, Save
         } from "lucide-react";
         
         // Firebase Imports
         import { initializeApp } from "firebase/app";
-        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, where } from "firebase/firestore";
+        import { getFirestore, collection, doc, setDoc, getDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, where } from "firebase/firestore";
 
         // ==========================================
         // 設定項目 (Firebase)
@@ -104,6 +104,20 @@
         };
         
         const formatYen = (val) => `¥${val.toLocaleString()}`;
+
+        // 計画データの初期値生成
+        const createInitialPlanData = () => {
+            return MONTHS_LIST.reduce((acc, month) => {
+                acc[month] = {
+                    enrollments: 0,
+                    trials: 0,
+                    touchTry: 0,
+                    flyers: 0,
+                    rate: 0
+                };
+                return acc;
+            }, {});
+        };
 
         // UIコンポーネント: カード
         const StatCard = ({ title, value, subValue, trend, icon: Icon, color, details }) => (
@@ -162,10 +176,14 @@
             const [newCampusSheetName, setNewCampusSheetName] = useState(""); 
             const [isSyncing, setIsSyncing] = useState(false);
 
+            // 計画管理用ステート
+            const [planData, setPlanData] = useState(createInitialPlanData());
+            const [isSavingPlan, setIsSavingPlan] = useState(false);
+
             // リアルタイムデータ
             const [realEnrollments, setRealEnrollments] = useState([]);
             const [realStatusChanges, setRealStatusChanges] = useState([]);
-            const [realTransfers, setRealTransfers] = useState([]); // 編入(転入)
+            const [realTransfers, setRealTransfers] = useState([]); 
 
             // データ状態管理
             const [rawDataMap, setRawDataMap] = useState(null); 
@@ -183,12 +201,11 @@
             }, [selectedCampusId, campusList]);
 
             // ----------------------------------------------------------------
-            // 1. 校舎リストの同期 (Campuses Collection)
+            // 1. 校舎リストの同期
             // ----------------------------------------------------------------
             useEffect(() => {
                 if (!isFirebaseInitialized || !db) return;
                 setIsSyncing(true);
-                
                 const q = query(collection(db, "campuses"), orderBy("createdAt"));
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const campuses = [];
@@ -200,8 +217,6 @@
                             sheetName: data.sheetName || data.name || doc.id
                         });
                     });
-                    
-                    console.log("Synced campuses:", campuses);
                     setCampusList(campuses);
                     setIsSyncing(false);
                 }, (error) => {
@@ -212,43 +227,45 @@
             }, []);
 
             // ----------------------------------------------------------------
-            // 2. 入会データの同期
+            // 2-4. 各種実績データの同期
             // ----------------------------------------------------------------
             useEffect(() => {
                 if (!isFirebaseInitialized || !db) return;
-                const q = query(collection(db, "enrollments"));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const enrollmentData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setRealEnrollments(enrollmentData);
-                }, (error) => console.error("Enrollment sync error:", error));
-                return () => unsubscribe();
+                const unsubEnroll = onSnapshot(query(collection(db, "enrollments")), (snap) => setRealEnrollments(snap.docs.map(d => ({id:d.id, ...d.data()}))));
+                const unsubStatus = onSnapshot(query(collection(db, "status_changes")), (snap) => setRealStatusChanges(snap.docs.map(d => ({id:d.id, ...d.data()}))));
+                const unsubTransfer = onSnapshot(query(collection(db, "transfers")), (snap) => setRealTransfers(snap.docs.map(d => ({id:d.id, ...d.data()}))));
+                
+                return () => { unsubEnroll(); unsubStatus(); unsubTransfer(); };
             }, []);
 
             // ----------------------------------------------------------------
-            // 3. 退会・休会・復会データの同期
+            // 5. 計画データの取得 (校舎・年度変更時)
             // ----------------------------------------------------------------
             useEffect(() => {
-                if (!isFirebaseInitialized || !db) return;
-                const q = query(collection(db, "status_changes"));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const statusData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setRealStatusChanges(statusData);
-                }, (error) => console.error("Status changes sync error:", error));
-                return () => unsubscribe();
-            }, []);
+                const fetchPlan = async () => {
+                    if (selectedCampusId === 'All') return; // 全校舎時は取得しない（または合計ロジックが必要だが今回は編集画面なのでスキップ）
+                    
+                    if (!isFirebaseInitialized || !db) {
+                        setPlanData(createInitialPlanData()); // ローカル時は初期値
+                        return;
+                    }
 
-            // ----------------------------------------------------------------
-            // 4. 編入(転入)データの同期
-            // ----------------------------------------------------------------
-            useEffect(() => {
-                if (!isFirebaseInitialized || !db) return;
-                const q = query(collection(db, "transfers"));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const transferData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-                    setRealTransfers(transferData);
-                }, (error) => console.error("Transfers sync error:", error));
-                return () => unsubscribe();
-            }, []);
+                    try {
+                        const docId = `${selectedCampusId}_${selectedYear}`;
+                        const docRef = doc(db, "campus_plans", docId);
+                        const docSnap = await getDoc(docRef);
+
+                        if (docSnap.exists()) {
+                            setPlanData(docSnap.data().plans);
+                        } else {
+                            setPlanData(createInitialPlanData()); // データなければ初期値
+                        }
+                    } catch (e) {
+                        console.error("Fetch plan error:", e);
+                    }
+                };
+                fetchPlan();
+            }, [selectedCampusId, selectedYear]);
 
             // ----------------------------------------------------------------
             // データ生成・集計ロジックトリガー
@@ -265,66 +282,47 @@
             }, [campusList, realEnrollments, realStatusChanges, realTransfers, selectedYear]);
 
             // ----------------------------------------------------------------
-            // 集計ロジック本体
+            // 集計ロジック (省略なし)
             // ----------------------------------------------------------------
             const generateAllCampusesData = (targetCampuses, realEnrollmentList, realStatusList, realTransferList, targetYear) => {
                 const dataMap = {};
-
                 const sheetNameToIdMap = {};
                 targetCampuses.forEach(c => {
                     const key = c.sheetName || c.name;
                     sheetNameToIdMap[key] = c.id;
                 });
 
-                // ヘルパー: 指定年度より「前」の累計数をカウント (期首在庫計算用)
                 const countTotalBefore = (list, year, typeFilter = null) => {
-                    const counts = {}; // { campusId: count }
+                    const counts = {}; 
                     if (!list) return counts;
-
                     list.forEach(item => {
                         const dateObj = new Date(item.date);
                         if (isNaN(dateObj)) return;
-                        
                         if (getFiscalYear(dateObj) >= year) return; 
-
-                        if (typeFilter) {
-                            if (!item.type || !item.type.includes(typeFilter)) return;
-                        }
-
+                        if (typeFilter && (!item.type || !item.type.includes(typeFilter))) return;
                         const rawSheetName = item.campus;
                         const campusId = sheetNameToIdMap[rawSheetName];
                         if (!campusId) return;
-
                         counts[campusId] = (counts[campusId] || 0) + 1;
                     });
                     return counts;
                 };
 
-                // ヘルパー: 指定年度「内」の月次集計
                 const countEvents = (list, typeFilter = null) => {
                     const counts = {};
                     if (!list) return counts;
-
                     list.forEach(item => {
                         const dateObj = new Date(item.date);
                         if (isNaN(dateObj)) return;
-                        
                         if (getFiscalYear(dateObj) !== targetYear) return; 
-
-                        if (typeFilter) {
-                            if (!item.type || !item.type.includes(typeFilter)) return;
-                        }
-
+                        if (typeFilter && (!item.type || !item.type.includes(typeFilter))) return;
                         const rawSheetName = item.campus;
                         const campusId = sheetNameToIdMap[rawSheetName];
                         if (!campusId) return;
-
                         const monthIdx = (dateObj.getMonth() + 9) % 12; 
                         const day = dateObj.getDate();
-
                         if (!counts[campusId]) counts[campusId] = {};
                         if (!counts[campusId][monthIdx]) counts[campusId][monthIdx] = { total: 0, days: {} };
-                        
                         counts[campusId][monthIdx].total++;
                         if (!counts[campusId][monthIdx].days[day]) counts[campusId][monthIdx].days[day] = 0;
                         counts[campusId][monthIdx].days[day]++;
@@ -332,29 +330,24 @@
                     return counts;
                 };
 
-                // 1. 期首時点（前年度末まで）の累計を集計
                 const prevEnrollments = countTotalBefore(realEnrollmentList, targetYear);
                 const prevTransferIns = countTotalBefore(realTransferList, targetYear);
                 const prevWithdrawals = countTotalBefore(realStatusList, targetYear, "退会");
-                const prevTransfers = countTotalBefore(realStatusList, targetYear, "転校"); // 転出
+                const prevTransfers = countTotalBefore(realStatusList, targetYear, "転校");
                 const prevGraduates = countTotalBefore(realStatusList, targetYear, "卒業");
 
-                // 2. 当該年度の各種データを集計
                 const enrollmentCounts = countEvents(realEnrollmentList);
                 const transferInCounts = countEvents(realTransferList);
                 const withdrawalCounts = countEvents(realStatusList, "退会");
                 const recessCounts = countEvents(realStatusList, "休会");
                 const returnCounts = countEvents(realStatusList, "復会");
-                const transferCounts = countEvents(realStatusList, "転校"); // 転出
+                const transferCounts = countEvents(realStatusList, "転校");
                 const graduateCounts = countEvents(realStatusList, "卒業");
 
                 const hasRealData = realEnrollmentList.length > 0 || realStatusList.length > 0 || realTransferList.length > 0;
 
                 targetCampuses.forEach(campusObj => {
                     const campusId = campusObj.id;
-                    
-                    // ★ 初期生徒数（期首人数）の計算
-                    // 期首在籍数 = 過去(入会 + 転入) - 過去(退会 + 転出 + 卒業)
                     let currentStudents = 0;
                     if (hasRealData) {
                         const pEnroll = prevEnrollments[campusId] || 0;
@@ -366,10 +359,6 @@
                     }
 
                     dataMap[campusId] = MONTHS_LIST.map((month, idx) => {
-                        const monthlyBudget = 0;
-                        const monthlyActual = 0;
-                        const monthlyFlyers = 0;
-                        
                         const getCount = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].total : 0;
                         const getDays = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].days : {};
 
@@ -387,45 +376,32 @@
                             val.graduate = getCount(graduateCounts);
                         } 
 
-                        // ■ 日次データ生成
                         const daily = Array.from({ length: 30 }, (_, dIdx) => {
                             const dayNum = dIdx + 1;
                             const getDayCount = (daysObj) => (daysObj[dayNum] || 0);
-                            
-                            const dEnroll = hasRealData ? getDayCount(getDays(enrollmentCounts)) : 0;
-                            const dTransferIn = hasRealData ? getDayCount(getDays(transferInCounts)) : 0;
-                            const dWithdraw = hasRealData ? getDayCount(getDays(withdrawalCounts)) : 0;
-                            const dRecess = hasRealData ? getDayCount(getDays(recessCounts)) : 0;
-                            const dReturn = hasRealData ? getDayCount(getDays(returnCounts)) : 0;
-                            const dTransfer = hasRealData ? getDayCount(getDays(transferCounts)) : 0;
-                            const dGraduate = hasRealData ? getDayCount(getDays(graduateCounts)) : 0;
-
                             return {
                                 name: `${dayNum}日`,
                                 budgetRevenue: 0, actualRevenue: 0,
-                                newEnrollments: dEnroll,
-                                transferIns: dTransferIn,
-                                withdrawals: dWithdraw,
-                                recesses: dRecess,
-                                returns: dReturn,
-                                transfers: dTransfer,
-                                graduates: dGraduate,
+                                newEnrollments: hasRealData ? getDayCount(getDays(enrollmentCounts)) : 0,
+                                transferIns: hasRealData ? getDayCount(getDays(transferInCounts)) : 0,
+                                withdrawals: hasRealData ? getDayCount(getDays(withdrawalCounts)) : 0,
+                                recesses: hasRealData ? getDayCount(getDays(recessCounts)) : 0,
+                                returns: hasRealData ? getDayCount(getDays(returnCounts)) : 0,
+                                transfers: hasRealData ? getDayCount(getDays(transferCounts)) : 0,
+                                graduates: hasRealData ? getDayCount(getDays(graduateCounts)) : 0,
                                 flyers: 0,
                                 totalStudents: currentStudents,
-                                // グラフ表示用の負の値 (Stack用)
-                                withdrawals_neg: -dWithdraw,
-                                recesses_neg: -dRecess,
-                                transfers_neg: -dTransfer,
-                                graduates_neg: -dGraduate
+                                withdrawals_neg: hasRealData ? -getDayCount(getDays(withdrawalCounts)) : 0,
+                                recesses_neg: hasRealData ? -getDayCount(getDays(recessCounts)) : 0,
+                                transfers_neg: hasRealData ? -getDayCount(getDays(transferCounts)) : 0,
+                                graduates_neg: hasRealData ? -getDayCount(getDays(graduateCounts)) : 0
                             };
                         });
 
-                        // ■ 週次データ生成
                         const weekly = Array.from({ length: 4 }, (_, wIdx) => {
+                            let wVal = { enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0, transferIn: 0 };
                             const startDay = wIdx * 7 + 1;
                             const endDay = wIdx === 3 ? 31 : (wIdx + 1) * 7;
-                            let wVal = { enroll: 0, withdraw: 0, recess: 0, return: 0, transfer: 0, graduate: 0, transferIn: 0 };
-                            
                             for (let i = startDay - 1; i < endDay && i < 30; i++) {
                                 wVal.enroll += daily[i].newEnrollments;
                                 wVal.transferIn += daily[i].transferIns;
@@ -435,7 +411,6 @@
                                 wVal.transfer += daily[i].transfers;
                                 wVal.graduate += daily[i].graduates;
                             }
-
                              return {
                                 name: `第${wIdx + 1}週`,
                                 budgetRevenue: 0, actualRevenue: 0,
@@ -449,7 +424,6 @@
                                 flyers: 0,
                                 enrollmentRate: "0.0",
                                 totalStudents: currentStudents,
-                                // グラフ表示用の負の値
                                 withdrawals_neg: -wVal.withdraw,
                                 recesses_neg: -wVal.recess,
                                 transfers_neg: -wVal.transfer,
@@ -457,14 +431,12 @@
                             };
                         });
 
-                        // 在籍数更新ロジック: 入会 + 転入 - 退会 - 転出 - 卒業
                         const netChange = (val.enroll + val.transferIn) - (val.withdraw + val.transfer + val.graduate);
                         currentStudents += netChange;
 
                         return {
                             name: month,
-                            budgetRevenue: monthlyBudget,
-                            actualRevenue: monthlyActual,
+                            budgetRevenue: 0, actualRevenue: 0,
                             newEnrollments: val.enroll,
                             transferIns: val.transferIn,
                             withdrawals: val.withdraw,
@@ -473,11 +445,10 @@
                             transfers: val.transfer,
                             graduates: val.graduate,
                             totalStudents: currentStudents,
-                            flyers: monthlyFlyers,
+                            flyers: 0,
                             touchAndTry: 0,
                             trialLessons: 0, 
                             enrollmentRate: "0.0",
-                            // グラフ表示用の負の値 (月次)
                             withdrawals_neg: -val.withdraw,
                             recesses_neg: -val.recess,
                             transfers_neg: -val.transfer,
@@ -487,7 +458,6 @@
                     });
                 });
 
-                // 'All' 生成ロジック (合算)
                 dataMap['All'] = MONTHS_LIST.map((month, idx) => {
                     const combined = {
                         name: month,
@@ -510,68 +480,28 @@
                     targetCampuses.forEach(campusObj => {
                         const d = dataMap[campusObj.id]?.[idx];
                         if (d) {
-                            combined.budgetRevenue += d.budgetRevenue;
-                            combined.actualRevenue += d.actualRevenue;
-                            combined.newEnrollments += d.newEnrollments;
-                            combined.transferIns += d.transferIns;
-                            combined.withdrawals += d.withdrawals;
-                            combined.recesses += d.recesses;
-                            combined.returns += d.returns;
-                            combined.transfers += d.transfers;
-                            combined.graduates += d.graduates;
-                            combined.totalStudents += d.totalStudents;
-                            combined.flyers += d.flyers;
-                            combined.trialLessons += d.trialLessons;
-
-                            // 負の値も合算
-                            combined.withdrawals_neg += d.withdrawals_neg;
-                            combined.recesses_neg += d.recesses_neg;
-                            combined.transfers_neg += d.transfers_neg;
-                            combined.graduates_neg += d.graduates_neg;
-
+                            Object.keys(combined).forEach(key => {
+                                if (typeof combined[key] === 'number') combined[key] += d[key];
+                            });
+                            // Array sum for daily/weekly (simplified)
                             d.daily.forEach((day, dayIdx) => {
                                 if (combined.daily[dayIdx]) {
-                                    combined.daily[dayIdx].actualRevenue += day.actualRevenue;
-                                    combined.daily[dayIdx].budgetRevenue += day.budgetRevenue;
-                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments;
-                                    combined.daily[dayIdx].transferIns += day.transferIns;
-                                    combined.daily[dayIdx].withdrawals += day.withdrawals;
-                                    combined.daily[dayIdx].recesses += day.recesses;
-                                    combined.daily[dayIdx].returns += day.returns;
-                                    combined.daily[dayIdx].transfers += day.transfers;
-                                    combined.daily[dayIdx].graduates += day.graduates;
-                                    combined.daily[dayIdx].flyers += day.flyers;
-                                    // 負の値
-                                    combined.daily[dayIdx].withdrawals_neg += day.withdrawals_neg;
-                                    combined.daily[dayIdx].recesses_neg += day.recesses_neg;
-                                    combined.daily[dayIdx].transfers_neg += day.transfers_neg;
-                                    combined.daily[dayIdx].graduates_neg += day.graduates_neg;
+                                    Object.keys(combined.daily[dayIdx]).forEach(k => {
+                                        if (typeof combined.daily[dayIdx][k] === 'number' && k !== 'name') combined.daily[dayIdx][k] += day[k];
+                                    });
                                 }
                             });
                             d.weekly.forEach((week, weekIdx) => {
                                 if (combined.weekly[weekIdx]) {
-                                    combined.weekly[weekIdx].actualRevenue += week.actualRevenue;
-                                    combined.weekly[weekIdx].budgetRevenue += week.budgetRevenue;
-                                    combined.weekly[weekIdx].newEnrollments += week.newEnrollments; 
-                                    combined.weekly[weekIdx].transferIns += week.transferIns; 
-                                    combined.weekly[weekIdx].withdrawals += week.withdrawals;
-                                    combined.weekly[weekIdx].recesses += week.recesses;
-                                    combined.weekly[weekIdx].returns += week.returns;
-                                    combined.weekly[weekIdx].transfers += week.transfers;
-                                    combined.weekly[weekIdx].graduates += week.graduates;
-                                    combined.weekly[weekIdx].flyers += week.flyers;
-                                    // 負の値
-                                    combined.weekly[weekIdx].withdrawals_neg += week.withdrawals_neg;
-                                    combined.weekly[weekIdx].recesses_neg += week.recesses_neg;
-                                    combined.weekly[weekIdx].transfers_neg += week.transfers_neg;
-                                    combined.weekly[weekIdx].graduates_neg += week.graduates_neg;
+                                    Object.keys(combined.weekly[weekIdx]).forEach(k => {
+                                        if (typeof combined.weekly[weekIdx][k] === 'number' && k !== 'name') combined.weekly[weekIdx][k] += week[k];
+                                    });
                                 }
                             });
                         }
                     });
                     return combined;
                 });
-
                 return dataMap;
             };
 
@@ -589,20 +519,12 @@
                 const id = newCampusId.trim();
                 const name = newCampusName.trim();
                 const sheetName = newCampusSheetName.trim() || name;
+                if (!id || !name) return alert("校舎IDと校舎名は必須です。");
+                if (campusList.some(c => c.id === id)) return alert("その校舎IDは既に使用されています。");
                 
-                if (!id || !name) {
-                    alert("校舎IDと校舎名の両方を入力してください。");
-                    return;
-                }
-                if (campusList.some(c => c.id === id)) {
-                    alert("エラー: その校舎IDは既に使用されています。");
-                    return;
-                }
                 if (isFirebaseInitialized && db) {
                     try {
-                        await setDoc(doc(db, "campuses", id), { 
-                            id: id, name: name, sheetName: sheetName, createdAt: serverTimestamp() 
-                        });
+                        await setDoc(doc(db, "campuses", id), { id: id, name: name, sheetName: sheetName, createdAt: serverTimestamp() });
                         setNewCampusId(""); setNewCampusName(""); setNewCampusSheetName("");
                     } catch (e) { alert("Error: " + e.message); }
                 }
@@ -618,11 +540,46 @@
                 }
             };
 
+            // 計画データの入力ハンドラ
+            const handlePlanChange = (month, field, value) => {
+                setPlanData(prev => {
+                    const newData = { ...prev };
+                    newData[month] = { ...newData[month], [field]: Number(value) };
+                    
+                    // 入会率の自動計算 (Enrollments / Trials)
+                    if (field === 'enrollments' || field === 'trials') {
+                        const enr = field === 'enrollments' ? Number(value) : newData[month].enrollments;
+                        const tri = field === 'trials' ? Number(value) : newData[month].trials;
+                        newData[month].rate = tri > 0 ? ((enr / tri) * 100).toFixed(1) : 0;
+                    }
+                    return newData;
+                });
+            };
+
+            // 計画データの保存ハンドラ
+            const savePlanData = async () => {
+                if (selectedCampusId === 'All') return;
+                setIsSavingPlan(true);
+                try {
+                    const docId = `${selectedCampusId}_${selectedYear}`;
+                    await setDoc(doc(db, "campus_plans", docId), {
+                        campusId: selectedCampusId,
+                        year: selectedYear,
+                        plans: planData,
+                        updatedAt: serverTimestamp()
+                    });
+                    alert("計画データを保存しました。");
+                } catch (e) {
+                    console.error("Save plan error:", e);
+                    alert("保存に失敗しました: " + e.message);
+                } finally {
+                    setIsSavingPlan(false);
+                }
+            };
+
             // 初回ロード
             useEffect(() => {
-                if (!isFirebaseInitialized) {
-                    fetchDashboardData([]);
-                }
+                if (!isFirebaseInitialized) fetchDashboardData([]);
             }, []);
 
             // データ反映
@@ -700,6 +657,10 @@
                                 <Megaphone className="w-5 h-5" />
                                 <span className="font-medium">集客・販促</span>
                             </button>
+                            <button onClick={() => setActiveTab('planning')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'planning' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
+                                <FileText className="w-5 h-5" />
+                                <span className="font-medium">計画管理</span>
+                            </button>
                             <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
                                 <Settings className="w-5 h-5" />
                                 <span className="font-medium">校舎設定</span>
@@ -725,11 +686,26 @@
                     </aside>
 
                     <main className="flex-1 flex flex-col overflow-hidden h-screen">
+                        {errorMsg && (
+                            <div className="bg-red-50 border-l-4 border-red-500 p-4 m-4 mb-0 flex justify-between items-center">
+                                <div className="flex">
+                                    <div className="flex-shrink-0">
+                                        <AlertCircle className="h-5 w-5 text-red-500" />
+                                    </div>
+                                    <div className="ml-3">
+                                        <p className="text-sm text-red-700">{errorMsg}</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => setErrorMsg(null)} className="text-red-500 hover:text-red-700 font-bold">×</button>
+                            </div>
+                        )}
+                        
                         <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 sticky top-0 z-10 shrink-0">
                             <h1 className="text-xl font-bold text-slate-800">
                                 {activeTab === 'summary' && '経営サマリー'}
                                 {activeTab === 'students' && '生徒数・入退会管理'}
                                 {activeTab === 'marketing' && '集客活動・販促管理'}
+                                {activeTab === 'planning' && '年間計画・予算管理'}
                                 {activeTab === 'settings' && '校舎設定・管理'}
                             </h1>
                             
@@ -742,18 +718,22 @@
                                                 {YEARS_LIST.map(y => <option key={y} value={y}>{y}年度</option>)}
                                             </select>
                                         </div>
-                                        <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
-                                            <button onClick={() => setViewMode('annual')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'annual' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>年度</button>
-                                            <button onClick={() => setViewMode('monthly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>月度</button>
-                                            <button onClick={() => setViewMode('weekly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>週次</button>
-                                        </div>
-                                        {viewMode !== 'annual' && (
-                                            <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200 animate-in fade-in zoom-in duration-200">
-                                                <Calendar className="w-3 h-3 text-slate-500 mr-2" />
-                                                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1 pr-1">
-                                                    {MONTHS_LIST.map(m => <option key={m} value={m}>{m}</option>)}
-                                                </select>
-                                            </div>
+                                        {activeTab !== 'planning' && (
+                                            <>
+                                                <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
+                                                    <button onClick={() => setViewMode('annual')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'annual' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>年度</button>
+                                                    <button onClick={() => setViewMode('monthly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>月度</button>
+                                                    <button onClick={() => setViewMode('weekly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>週次</button>
+                                                </div>
+                                                {viewMode !== 'annual' && (
+                                                    <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200 animate-in fade-in zoom-in duration-200">
+                                                        <Calendar className="w-3 h-3 text-slate-500 mr-2" />
+                                                        <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1 pr-1">
+                                                            {MONTHS_LIST.map(m => <option key={m} value={m}>{m}</option>)}
+                                                        </select>
+                                                    </div>
+                                                )}
+                                            </>
                                         )}
                                         <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200">
                                             <MapPin className="w-3 h-3 text-slate-500 mr-2" />
@@ -773,6 +753,96 @@
 
                         <div className="flex-1 overflow-y-auto p-6">
                             <div className="max-w-7xl mx-auto space-y-6">
+                                {/* Planning View */}
+                                {activeTab === 'planning' && (
+                                    <div className="space-y-6 animate-in fade-in duration-500">
+                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100">
+                                            <div className="flex justify-between items-center mb-6">
+                                                <h2 className="text-lg font-bold text-slate-800 flex items-center">
+                                                    <FileText className="w-5 h-5 mr-2 text-blue-600" />
+                                                    年間計画入力 ({selectedCampusName} / {selectedYear}年度)
+                                                </h2>
+                                                {selectedCampusId !== 'All' && (
+                                                    <button 
+                                                        onClick={savePlanData}
+                                                        disabled={isSavingPlan}
+                                                        className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 flex items-center shadow-sm disabled:opacity-50"
+                                                    >
+                                                        <Save className="w-4 h-4 mr-2" />
+                                                        {isSavingPlan ? '保存中...' : '計画を保存'}
+                                                    </button>
+                                                )}
+                                            </div>
+
+                                            {selectedCampusId === 'All' ? (
+                                                <div className="p-8 text-center text-slate-500 bg-slate-50 rounded-lg">
+                                                    <AlertCircle className="w-10 h-10 mx-auto mb-2 text-slate-400" />
+                                                    <p>全校舎の合計画面では計画入力はできません。</p>
+                                                    <p className="text-sm mt-1">右上のドロップダウンから個別の校舎を選択してください。</p>
+                                                </div>
+                                            ) : (
+                                                <div className="overflow-x-auto">
+                                                    <table className="w-full text-sm text-left border-collapse">
+                                                        <thead className="bg-slate-50 text-slate-600 font-medium border-b border-slate-200">
+                                                            <tr>
+                                                                <th className="px-4 py-3 w-20">月度</th>
+                                                                <th className="px-4 py-3 w-32">目標入会数</th>
+                                                                <th className="px-4 py-3 w-32">体験会実施</th>
+                                                                <th className="px-4 py-3 w-32">タッチ&トライ</th>
+                                                                <th className="px-4 py-3 w-32">門配数</th>
+                                                                <th className="px-4 py-3 w-24">入会率(%)</th>
+                                                            </tr>
+                                                        </thead>
+                                                        <tbody className="divide-y divide-slate-100">
+                                                            {MONTHS_LIST.map((month) => (
+                                                                <tr key={month} className="hover:bg-slate-50">
+                                                                    <td className="px-4 py-3 font-bold text-slate-700 bg-slate-50/50">{month}</td>
+                                                                    <td className="px-4 py-2">
+                                                                        <input 
+                                                                            type="number" min="0"
+                                                                            value={planData[month]?.enrollments || 0}
+                                                                            onChange={(e) => handlePlanChange(month, 'enrollments', e.target.value)}
+                                                                            className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-4 py-2">
+                                                                        <input 
+                                                                            type="number" min="0"
+                                                                            value={planData[month]?.trials || 0}
+                                                                            onChange={(e) => handlePlanChange(month, 'trials', e.target.value)}
+                                                                            className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-4 py-2">
+                                                                        <input 
+                                                                            type="number" min="0"
+                                                                            value={planData[month]?.touchTry || 0}
+                                                                            onChange={(e) => handlePlanChange(month, 'touchTry', e.target.value)}
+                                                                            className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-4 py-2">
+                                                                        <input 
+                                                                            type="number" min="0"
+                                                                            value={planData[month]?.flyers || 0}
+                                                                            onChange={(e) => handlePlanChange(month, 'flyers', e.target.value)}
+                                                                            className="w-full px-2 py-1 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none text-right"
+                                                                        />
+                                                                    </td>
+                                                                    <td className="px-4 py-3 text-right font-medium text-slate-600">
+                                                                        {planData[month]?.rate}%
+                                                                    </td>
+                                                                </tr>
+                                                            ))}
+                                                        </tbody>
+                                                    </table>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+                                )}
+
+                                {/* Settings View */}
                                 {activeTab === 'settings' && (
                                     <div className="space-y-6 animate-in fade-in duration-500">
                                         <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-100">
@@ -894,6 +964,30 @@
                                                 </table>
                                             </div>
                                         </div>
+                                    </div>
+                                )}
+                                
+                                {/* Marketing View */}
+                                {activeTab === 'marketing' && (
+                                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[500px] animate-in fade-in duration-500">
+                                        <div className="flex justify-between items-center mb-6">
+                                            <h3 className="text-lg font-bold text-slate-800">集客ファネル</h3>
+                                            <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                                                {selectedCampusName} / {viewModeLabel}
+                                            </span>
+                                        </div>
+                                        <ResponsiveContainer width="100%" height="100%">
+                                            <ComposedChart data={displayData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
+                                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                                <XAxis dataKey="name" />
+                                                <YAxis yAxisId="left" orientation="left" />
+                                                <YAxis yAxisId="right" orientation="right" />
+                                                <Tooltip />
+                                                <Legend />
+                                                <Bar yAxisId="left" dataKey="flyers" name="チラシ配布" fill="#94a3b8" />
+                                                <Line yAxisId="right" type="monotone" dataKey="newEnrollments" name="入会数" stroke="#10b981" strokeWidth={3} />
+                                            </ComposedChart>
+                                        </ResponsiveContainer>
                                     </div>
                                 )}
                             </div>
