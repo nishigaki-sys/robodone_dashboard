@@ -1,291 +1,4 @@
-<!DOCTYPE html>
-<html lang="ja">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Robot School Dashboard (Firebase Realtime)</title>
-    <!-- Tailwind CSS (デザイン用) -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <!-- Babel (ブラウザでReactを動かすため) -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-    
-    <!-- Import Map: Firebase SDKを追加 -->
-    <script type="importmap">
-    {
-        "imports": {
-            "react": "https://esm.sh/react@18.2.0",
-            "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
-            "react-dom": "https://esm.sh/react-dom@18.2.0",
-            "recharts": "https://esm.sh/recharts@2.12.2?external=react,react-dom",
-            "lucide-react": "https://esm.sh/lucide-react@0.344.0?external=react,react-dom",
-            "firebase/app": "https://www.gstatic.com/firebasejs/10.8.1/firebase-app.js",
-            "firebase/firestore": "https://www.gstatic.com/firebasejs/10.8.1/firebase-firestore.js"
-        }
-    }
-    </script>
-
-    <style>
-        /* 読み込み時のちらつき防止 */
-        body { opacity: 0; animation: fadeIn 0.5s forwards; }
-        @keyframes fadeIn { to { opacity: 1; } }
-    </style>
-</head>
-<body class="bg-slate-50 text-slate-900">
-    <div id="root"></div>
-
-    <!-- アプリケーションのスクリプト -->
-    <!-- 外部ファイル読み込みによるエラーを回避するため、インラインスクリプトに変更しました -->
-    <script type="text/babel" data-type="module">
-        import React, { useState, useMemo, useEffect, useRef } from "react";
-        import { createRoot } from "react-dom/client";
-        import { 
-            BarChart, Bar, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
-            ComposedChart, AreaChart, Area, PieChart, Pie, Cell 
-        } from "recharts";
-        import { 
-            LayoutDashboard, Users, Megaphone, TrendingUp, Calendar, 
-            ArrowUpRight, ArrowDownRight, DollarSign, Activity, Filter, 
-            Download, RefreshCw, Loader2, AlertCircle, CheckCircle, ShieldCheck, MapPin, Layers,
-            Settings, Plus, Trash2, School, Database, Wifi, FileSpreadsheet, Key, Link2
-        } from "lucide-react";
-        
-        // Firebase Imports
-        import { initializeApp } from "firebase/app";
-        import { getFirestore, collection, doc, setDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp, where } from "firebase/firestore";
-
-        // ==========================================
-        // 設定項目 (Firebase & Google Sheets)
-        // ==========================================
-        
-        // ★★★ ここにFirebaseプロジェクトの設定を貼り付けてください ★★★
-        const FIREBASE_CONFIG = {
-            apiKey: "AIzaSyCsgMN0SWCC1SvCDIakYBejTWlxwBmiwJk",
-            authDomain: "robodone-dashboard.firebaseapp.com",
-            projectId: "robodone-dashboard",
-            storageBucket: "robodone-dashboard.firebasestorage.app",
-            messagingSenderId: "457095919160",
-            appId: "1:457095919160:web:1716af87290b63733598cd"
-        };
-
-        const CONFIG = {
-            API_KEY: 'YOUR_API_KEY_HERE', 
-            SHEETS: {
-                // ... (Google Sheets設定は維持)
-            }
-        };
-
-        const MONTHS_LIST = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
-        
-        // 追加: 年度リスト
-        const YEARS_LIST = [2023, 2024, 2025, 2026];
-
-        // ==========================================
-        // Firebase 初期化ラッパー
-        // ==========================================
-        let db = null;
-        let isFirebaseInitialized = false;
-
-        try {
-            if (FIREBASE_CONFIG.apiKey !== "YOUR_FIREBASE_API_KEY") {
-                const app = initializeApp(FIREBASE_CONFIG);
-                db = getFirestore(app);
-                isFirebaseInitialized = true;
-                console.log("Firebase initialized successfully");
-            } else {
-                console.log("Firebase config not set. Using local mode.");
-            }
-        } catch (e) {
-            console.error("Firebase initialization failed:", e);
-        }
-
-        // ==========================================
-        // ヘルパー関数
-        // ==========================================
-        const getFiscalMonthIndex = (dateStr) => {
-            const date = new Date(dateStr);
-            if (isNaN(date.getTime())) return -1;
-            const month = date.getMonth(); // 0-11
-            return (month + 9) % 12; // 4月=0, 3月=11
-        };
-
-        // 追加: 日付から年度（4月始まり）を取得する関数
-        const getFiscalYear = (date) => {
-            if (isNaN(date.getTime())) return -1;
-            // 1月~3月なら前年、4月~12月なら当年
-            return date.getMonth() < 3 ? date.getFullYear() - 1 : date.getFullYear();
-        };
-        
-        const formatYen = (val) => `¥${val.toLocaleString()}`;
-
-        // UIコンポーネント: カード
-        // 修正: details (内訳) を表示できるように拡張
-        const StatCard = ({ title, value, subValue, trend, icon: Icon, color, details }) => (
-            <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 hover:shadow-md transition-shadow">
-                <div className="flex justify-between items-start">
-                    <div>
-                        <p className="text-sm font-medium text-slate-500 mb-1">{title}</p>
-                        <h3 className="text-2xl font-bold text-slate-800">{value}</h3>
-                    </div>
-                    <div className={`p-3 rounded-lg ${color}`}>
-                        <Icon className="w-6 h-6 text-white" />
-                    </div>
-                </div>
-                <div className="mt-4 flex items-center text-sm">
-                    <span className={`flex items-center font-medium ${trend >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
-                        {trend !== 0 && (trend >= 0 ? <ArrowUpRight className="w-4 h-4 mr-1" /> : <ArrowDownRight className="w-4 h-4 mr-1" />)}
-                        {trend !== 0 ? `${Math.abs(trend)}%` : '-'}
-                    </span>
-                    <span className="text-slate-400 ml-2">{subValue}</span>
-                </div>
-                
-                {/* 内訳詳細エリア */}
-                {details && details.length > 0 && (
-                    <div className="mt-4 pt-3 border-t border-slate-100">
-                        <div className="space-y-1">
-                            {details.map((item, idx) => (
-                                <div key={idx} className="flex justify-between text-xs text-slate-500">
-                                    <span>{item.label}</span>
-                                    <span className="font-medium text-slate-700">{item.value}名</span>
-                                </div>
-                            ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-        );
-
-        // メインコンポーネント
-        function RobotSchoolDashboard() {
-            // 初期値設定: 現在の日時から年度と月を算出
-            const today = new Date();
-            // 4月始まりの年度計算 (1-3月は前年扱い)
-            const currentFiscalYear = today.getMonth() < 3 ? today.getFullYear() - 1 : today.getFullYear();
-            const currentMonthStr = `${today.getMonth() + 1}月`;
-
-            const [activeTab, setActiveTab] = useState('summary');
-            // 選択中の校舎ID ('All' または campus.id)
-            const [selectedCampusId, setSelectedCampusId] = useState('All'); 
-            
-            // デフォルトを月次表示、当年度、当月に設定
-            const [viewMode, setViewMode] = useState('monthly'); 
-            const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
-            const [selectedYear, setSelectedYear] = useState(currentFiscalYear);
-
-            // 校舎管理用ステート (デフォルトリストは削除し空で初期化)
-            const [campusList, setCampusList] = useState([]);
-            const [newCampusName, setNewCampusName] = useState("");
-            const [newCampusId, setNewCampusId] = useState(""); // 新規: 校舎ID入力用
-            const [newCampusSheetName, setNewCampusSheetName] = useState(""); // 新規: スプシ連携用名
-            const [isSyncing, setIsSyncing] = useState(false);
-
-            // リアルタイム入会データ
-            const [realEnrollments, setRealEnrollments] = useState([]);
-            const [realStatusChanges, setRealStatusChanges] = useState([]); // 退会・休会など
-
-            // データ状態管理
-            const [rawDataMap, setRawDataMap] = useState(null); 
-            const [displayData, setDisplayData] = useState([]); 
-            
-            const [isLoading, setIsLoading] = useState(true);
-            const [errorMsg, setErrorMsg] = useState(null);
-            const [lastUpdated, setLastUpdated] = useState(null);
-
-            // 現在選択されている校舎名（表示用）
-            const selectedCampusName = useMemo(() => {
-                if (selectedCampusId === 'All') return '全校舎 (合計)';
-                const campus = campusList.find(c => c.id === selectedCampusId);
-                return campus ? campus.name : selectedCampusId;
-            }, [selectedCampusId, campusList]);
-
-            // ----------------------------------------------------------------
-            // 1. 校舎リストの同期 (Campuses Collection)
-            // ----------------------------------------------------------------
-            useEffect(() => {
-                if (!isFirebaseInitialized || !db) return;
-                setIsSyncing(true);
-                
-                const q = query(collection(db, "campuses"), orderBy("createdAt"));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const campuses = [];
-                    snapshot.forEach((doc) => {
-                        const data = doc.data();
-                        campuses.push({
-                            id: doc.id,
-                            name: data.name || doc.id,
-                            sheetName: data.sheetName || data.name || doc.id // スプシ連携名（後方互換）
-                        });
-                    });
-                    
-                    console.log("Synced campuses:", campuses);
-                    if (campuses.length > 0) {
-                        setCampusList(campuses);
-                    } else {
-                        console.log("No campuses found in Firebase.");
-                        setCampusList([]); 
-                    }
-                    setIsSyncing(false);
-                }, (error) => {
-                    console.error("Campus sync error:", error);
-                    setIsSyncing(false);
-                    fetchDashboardData([]);
-                });
-                return () => unsubscribe();
-            }, []);
-
-            // ----------------------------------------------------------------
-            // 2. 入会データの同期
-            // ----------------------------------------------------------------
-            useEffect(() => {
-                if (!isFirebaseInitialized || !db) return;
-                const q = query(collection(db, "enrollments"));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const enrollmentData = snapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...doc.data()
-                    }));
-                    console.log("Synced enrollments:", enrollmentData.length);
-                    setRealEnrollments(enrollmentData);
-                }, (error) => {
-                    console.error("Enrollment sync error:", error);
-                });
-                return () => unsubscribe();
-            }, []);
-
-            // ----------------------------------------------------------------
-            // 3. 退会・休会・復会データの同期 (Status Changes)
-            // ----------------------------------------------------------------
-            useEffect(() => {
-                if (!isFirebaseInitialized || !db) return;
-                const q = query(collection(db, "status_changes"));
-                const unsubscribe = onSnapshot(q, (snapshot) => {
-                    const statusData = snapshot.docs.map(doc => ({
-                        id: doc.id,
-                        ...doc.data()
-                    }));
-                    console.log("Synced status changes:", statusData.length);
-                    setRealStatusChanges(statusData);
-                }, (error) => {
-                    console.error("Status changes sync error:", error);
-                });
-                return () => unsubscribe();
-            }, []);
-
-            // ----------------------------------------------------------------
-            // データ生成・集計ロジック (年度変更時も再計算)
-            // ----------------------------------------------------------------
-            useEffect(() => {
-                const generateData = async () => {
-                    setIsLoading(true);
-                    await new Promise(resolve => setTimeout(resolve, 300)); 
-                    const map = generateAllCampusesData(campusList, realEnrollments, realStatusChanges, selectedYear);
-                    setRawDataMap(map);
-                    setIsLoading(false);
-                };
-                generateData();
-            }, [campusList, realEnrollments, realStatusChanges, selectedYear]);
-
-
-            // ----------------------------------------------------------------
+// ----------------------------------------------------------------
             // モックデータ生成 + リアルデータのマージ
             // ----------------------------------------------------------------
             const generateAllCampusesData = (targetCampuses, realEnrollmentList, realStatusList, targetYear) => {
@@ -299,7 +12,34 @@
                     sheetNameToIdMap[key] = c.id;
                 });
 
-                // ■ 集計用ヘルパー関数
+                // ■ ヘルパー: 指定年度より「前」の累計数をカウント (期首在庫計算用)
+                const countTotalBefore = (list, year, typeFilter = null) => {
+                    const counts = {}; // { campusId: count }
+                    if (!list) return counts;
+
+                    list.forEach(item => {
+                        const dateObj = new Date(item.date);
+                        if (isNaN(dateObj)) return;
+                        
+                        // 指定年度より前のデータのみ対象
+                        if (getFiscalYear(dateObj) >= year) return;
+
+                        // 種別チェック
+                        if (typeFilter) {
+                            if (!item.type || !item.type.includes(typeFilter)) return;
+                        }
+
+                        // 校舎ID特定
+                        const rawSheetName = item.campus;
+                        const campusId = sheetNameToIdMap[rawSheetName];
+                        if (!campusId) return;
+
+                        counts[campusId] = (counts[campusId] || 0) + 1;
+                    });
+                    return counts;
+                };
+
+                // ■ ヘルパー: 指定年度「内」の月次集計
                 const countEvents = (list, typeFilter = null) => {
                     // counts[校舎ID][月Idx] = { total: 0, days: { 1: 0, ... } }
                     const counts = {};
@@ -335,7 +75,19 @@
                     return counts;
                 };
 
-                // 各種データの集計実行
+                // 1. 期首時点（前年度末まで）の累計を集計
+                const prevEnrollments = countTotalBefore(realEnrollmentList, targetYear);
+                const prevWithdrawals = countTotalBefore(realStatusList, targetYear, "退会");
+                const prevTransfers = countTotalBefore(realStatusList, targetYear, "転校"); // 転出
+                const prevGraduates = countTotalBefore(realStatusList, targetYear, "卒業");
+                // ※転入、復会、休会は初期数計算において、
+                //  - 転入: +
+                //  - 復会: (休会中も在籍扱いなら影響なし)
+                //  - 休会: (在籍扱いなら影響なし)
+                //  ここではユーザー定義に従い「入会+転入 - 退会-転出」を基本とするが、
+                //  「卒業」も在籍から外れるためマイナスする
+
+                // 2. 当該年度の各種データを集計
                 const enrollmentCounts = countEvents(realEnrollmentList);
                 const withdrawalCounts = countEvents(realStatusList, "退会");
                 const recessCounts = countEvents(realStatusList, "休会");
@@ -347,14 +99,38 @@
 
                 targetCampuses.forEach(campusObj => {
                     const campusId = campusObj.id;
-                    // 初期生徒数（年度初め）: 0に設定（デフォルト0）
+                    
+                    // ★ 初期生徒数（期首人数）の計算
                     let currentStudents = 0;
+                    
+                    if (hasRealData) {
+                        const pEnroll = prevEnrollments[campusId] || 0;
+                        const pWithdraw = prevWithdrawals[campusId] || 0;
+                        const pTransfer = prevTransfers[campusId] || 0;
+                        const pGraduate = prevGraduates[campusId] || 0;
+                        // 前期末在籍数 = 過去の入会 - 過去の退会 - 過去の転出 - 過去の卒業
+                        currentStudents = pEnroll - pWithdraw - pTransfer - pGraduate;
+                    } else {
+                        // モックモード: 年度に応じた成長シミュレーション
+                        const seed = campusId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                        const scale = (0.5 + (seed % 10) / 10);
+                        // 基準年(2023)からの経過年数でベースを増やす
+                        const yearDiff = targetYear - 2023;
+                        const base = Math.floor(50 * scale);
+                        // 毎年少しずつ増える想定 (マイナスにはしない)
+                        currentStudents = Math.max(0, Math.floor(base + (base * 0.1 * yearDiff)));
+                    }
+
+                    // 月ごとの乱数調整用スケール
+                    const seed = campusId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+                    const scale = (0.5 + (seed % 10) / 10); 
 
                     dataMap[campusId] = MONTHS_LIST.map((month, idx) => {
-                        // モック値を全て0にする
-                        const monthlyBudget = 0;
-                        const monthlyActual = 0;
-                        const monthlyFlyers = 0;
+                        const seasonality = [0.8, 0.9, 1.0, 1.2, 1.3, 1.0, 1.0, 0.9, 1.1, 0.8, 0.9, 1.5][idx];
+                        
+                        const monthlyBudget = Math.floor(2000000 * scale * seasonality);
+                        const monthlyActual = Math.floor(monthlyBudget * (0.85 + Math.random() * 0.3));
+                        const monthlyFlyers = Math.floor(1000 * scale * seasonality);
                         
                         // ■ 各種実績値の取得
                         const getCount = (countsObj) => (countsObj[campusId] && countsObj[campusId][idx]) ? countsObj[campusId][idx].total : 0;
@@ -373,7 +149,7 @@
                             val.graduate = getCount(graduateCounts);
                             // 転入データがあればここで取得 (現状はソースがないため0)
                         } else {
-                            // モックモード: 全て0
+                            // モックモード: 全て0 (ユーザー要望によりデフォルト0)
                             val.enroll = 0;
                             val.withdraw = 0;
                             val.graduate = 0;
@@ -382,7 +158,6 @@
                         // ■ 日次データ生成
                         const daily = Array.from({ length: 30 }, (_, dIdx) => {
                             const dayNum = dIdx + 1;
-                            
                             const getDayCount = (daysObj) => (daysObj[dayNum] || 0);
                             
                             // リアルデータがあれば日次マップから取得
@@ -395,16 +170,16 @@
 
                             return {
                                 name: `${dayNum}日`,
-                                budgetRevenue: 0, // 0に
-                                actualRevenue: 0, // 0に
+                                budgetRevenue: 0,
+                                actualRevenue: 0,
                                 newEnrollments: dEnroll,
                                 withdrawals: dWithdraw,
                                 recesses: dRecess,
                                 returns: dReturn,
                                 transfers: dTransfer,
                                 graduates: dGraduate,
-                                flyers: 0, // 0に
-                                totalStudents: currentStudents 
+                                flyers: 0,
+                                totalStudents: currentStudents // 日次は簡易的に月初の値を維持表示
                             };
                         });
 
@@ -423,30 +198,26 @@
                                 wVal.transfer += daily[i].transfers;
                                 wVal.graduate += daily[i].graduates;
                             }
-                            
-                            // モックモードでも0のまま
 
                              return {
                                 name: `第${wIdx + 1}週`,
-                                budgetRevenue: 0, // 0に
-                                actualRevenue: 0, // 0に
+                                budgetRevenue: 0,
+                                actualRevenue: 0,
                                 newEnrollments: wVal.enroll,
                                 withdrawals: wVal.withdraw,
                                 recesses: wVal.recess,
                                 returns: wVal.return,
                                 transfers: wVal.transfer,
                                 graduates: wVal.graduate,
-                                flyers: 0, // 0に
+                                flyers: 0,
                                 enrollmentRate: "0.0",
                                 totalStudents: currentStudents 
                             };
                         });
 
-                        // 在籍数更新ロジック修正
-                        // 指定計算式: 前月末在籍数 ＋ 入会数 ＋ 転入 － 退会数 － 転出
-                        // ※ 休会・復会は含めない
-                        // ※ 卒業は指定式に含まれていないため除外 (必要なら - val.graduate を追加してください)
-                        const netChange = val.enroll + val.transferIn - val.withdraw - val.transfer;
+                        // 在籍数更新ロジック
+                        // 前月末在籍数 ＋ 入会数 ＋ 転入 － 退会数 － 転出 - 卒業
+                        const netChange = val.enroll + val.transferIn - val.withdraw - val.transfer - val.graduate;
                         currentStudents += netChange;
 
                         return {
@@ -462,623 +233,9 @@
                             totalStudents: currentStudents,
                             flyers: monthlyFlyers,
                             touchAndTry: Math.floor(monthlyFlyers * 0.05),
-                            trialLessons: 0, // 0に
+                            trialLessons: 0, 
                             enrollmentRate: "0.0",
                             daily, weekly
                         };
                     });
                 });
-
-                // 'All' 生成ロジック
-                dataMap['All'] = MONTHS_LIST.map((month, idx) => {
-                    const combined = {
-                        name: month,
-                        budgetRevenue: 0, actualRevenue: 0, 
-                        newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0,
-                        totalStudents: 0, flyers: 0, trialLessons: 0,
-                        daily: Array.from({ length: 30 }, (_, i) => ({ 
-                            name: `${i+1}日`, budgetRevenue: 0, actualRevenue: 0, 
-                            newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0 
-                        })),
-                        weekly: Array.from({ length: 4 }, (_, i) => ({ 
-                            name: `第${i+1}週`, budgetRevenue: 0, actualRevenue: 0, 
-                            newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0, flyers: 0 
-                        }))
-                    };
-
-                    targetCampuses.forEach(campusObj => {
-                        const d = dataMap[campusObj.id]?.[idx];
-                        if (d) {
-                            combined.budgetRevenue += d.budgetRevenue;
-                            combined.actualRevenue += d.actualRevenue;
-                            combined.newEnrollments += d.newEnrollments;
-                            combined.withdrawals += d.withdrawals;
-                            combined.recesses += d.recesses;
-                            combined.returns += d.returns;
-                            combined.transfers += d.transfers;
-                            combined.graduates += d.graduates;
-                            combined.totalStudents += d.totalStudents;
-                            combined.flyers += d.flyers;
-                            combined.trialLessons += d.trialLessons;
-
-                            // 日次合算
-                            d.daily.forEach((day, dayIdx) => {
-                                if (combined.daily[dayIdx]) {
-                                    combined.daily[dayIdx].actualRevenue += day.actualRevenue;
-                                    combined.daily[dayIdx].budgetRevenue += day.budgetRevenue;
-                                    combined.daily[dayIdx].newEnrollments += day.newEnrollments;
-                                    combined.daily[dayIdx].withdrawals += day.withdrawals;
-                                    combined.daily[dayIdx].recesses += day.recesses;
-                                    combined.daily[dayIdx].returns += day.returns;
-                                    combined.daily[dayIdx].transfers += day.transfers;
-                                    combined.daily[dayIdx].graduates += day.graduates;
-                                    combined.daily[dayIdx].flyers += day.flyers;
-                                }
-                            });
-                            // 週次合算
-                            d.weekly.forEach((week, weekIdx) => {
-                                if (combined.weekly[weekIdx]) {
-                                    combined.weekly[weekIdx].actualRevenue += week.actualRevenue;
-                                    combined.weekly[weekIdx].budgetRevenue += week.budgetRevenue;
-                                    combined.weekly[weekIdx].newEnrollments += week.newEnrollments; 
-                                    combined.weekly[weekIdx].withdrawals += week.withdrawals;
-                                    combined.weekly[weekIdx].recesses += week.recesses;
-                                    combined.weekly[weekIdx].returns += week.returns;
-                                    combined.weekly[weekIdx].transfers += week.transfers;
-                                    combined.weekly[weekIdx].graduates += week.graduates;
-                                    combined.weekly[weekIdx].flyers += week.flyers;
-                                }
-                            });
-                        }
-                    });
-                    combined.enrollmentRate = combined.trialLessons > 0 ? ((combined.newEnrollments / combined.trialLessons) * 100).toFixed(1) : "0.0";
-                    return combined;
-                });
-
-                return dataMap;
-            };
-
-            const fetchDashboardData = async (currentList = campusList) => {
-                setIsLoading(true);
-                await new Promise(resolve => setTimeout(resolve, 500));
-                // 引数に selectedYear を渡す
-                const generatedMap = generateAllCampusesData(currentList, realEnrollments, realStatusChanges, selectedYear);
-                setRawDataMap(generatedMap);
-                setLastUpdated(new Date());
-                setIsLoading(false);
-            };
-
-            // ----------------------------------------------------------------
-            // 校舎操作 (Firestore連携) - ID対応 + スプシ連携
-            // ----------------------------------------------------------------
-            const handleAddCampus = async () => {
-                const id = newCampusId.trim();
-                const name = newCampusName.trim();
-                const sheetName = newCampusSheetName.trim() || name; // 未入力なら校舎名をそのまま使う
-                
-                if (!id || !name) {
-                    alert("校舎IDと校舎名の両方を入力してください。");
-                    return;
-                }
-
-                if (campusList.some(c => c.id === id)) {
-                    alert("エラー: その校舎IDは既に使用されています。");
-                    return;
-                }
-                
-                if (isFirebaseInitialized && db) {
-                    try {
-                        await setDoc(doc(db, "campuses", id), { 
-                            id: id,
-                            name: name, 
-                            sheetName: sheetName,
-                            createdAt: serverTimestamp() 
-                        });
-                        setNewCampusId("");
-                        setNewCampusName("");
-                        setNewCampusSheetName("");
-                    } catch (e) { alert("Error: " + e.message); }
-                } else {
-                    const updatedList = [...campusList, { id, name, sheetName }];
-                    setCampusList(updatedList);
-                    setNewCampusId("");
-                    setNewCampusName("");
-                    setNewCampusSheetName("");
-                    fetchDashboardData(updatedList);
-                    alert(`${name} (ID: ${id}) を登録しました (ローカルのみ)`);
-                }
-            };
-
-            const handleDeleteCampus = async (targetId, targetName) => {
-                if (!confirm(`${targetName} (ID: ${targetId}) を削除しますか？`)) return;
-                
-                if (isFirebaseInitialized && db) {
-                    try {
-                        await deleteDoc(doc(db, "campuses", targetId));
-                        if (selectedCampusId === targetId) setSelectedCampusId('All');
-                    } catch (e) { alert("Error: " + e.message); }
-                } else {
-                    const updatedList = campusList.filter(c => c.id !== targetId);
-                    setCampusList(updatedList);
-                    if (selectedCampusId === targetId) setSelectedCampusId('All');
-                    fetchDashboardData(updatedList);
-                }
-            };
-
-            // 初回ロード (ローカルモード用)
-            useEffect(() => {
-                if (!isFirebaseInitialized) {
-                    fetchDashboardData([]);
-                }
-            }, []);
-
-            // 校舎・モード・月変更時のデータ反映
-            useEffect(() => {
-                if (rawDataMap) {
-                    const campusData = rawDataMap[selectedCampusId] || [];
-                    if (viewMode === 'annual') {
-                        setDisplayData(campusData);
-                    } else {
-                        const targetMonthData = campusData.find(d => d.name === selectedMonth);
-                        setDisplayData(targetMonthData ? (viewMode === 'monthly' ? targetMonthData.daily : targetMonthData.weekly) : []);
-                    }
-                }
-            }, [selectedCampusId, viewMode, selectedMonth, rawDataMap]);
-
-            // 表示用集計
-            const totals = useMemo(() => {
-                if (!displayData || displayData.length === 0) return { 
-                    budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, 
-                    newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0
-                };
-                return displayData.reduce((acc, curr) => ({
-                    budgetRevenue: acc.budgetRevenue + curr.budgetRevenue,
-                    actualRevenue: acc.actualRevenue + curr.actualRevenue,
-                    trialLessons: acc.trialLessons + (curr.trialLessons || 0),
-                    newEnrollments: acc.newEnrollments + (curr.newEnrollments || 0),
-                    withdrawals: acc.withdrawals + (curr.withdrawals || 0),
-                    recesses: acc.recesses + (curr.recesses || 0),
-                    returns: acc.returns + (curr.returns || 0),
-                    transfers: acc.transfers + (curr.transfers || 0),
-                    graduates: acc.graduates + (curr.graduates || 0),
-                }), { 
-                    budgetRevenue: 0, actualRevenue: 0, trialLessons: 0, 
-                    newEnrollments: 0, withdrawals: 0, recesses: 0, returns: 0, transfers: 0, graduates: 0
-                });
-            }, [displayData]);
-
-            const revenueAchievement = totals.budgetRevenue > 0 ? Math.round((totals.actualRevenue / totals.budgetRevenue) * 100) : 0;
-            const currentTotalStudents = displayData.length > 0 
-                ? (viewMode === 'annual' ? displayData[displayData.length-1].totalStudents : displayData[0].totalStudents)
-                : 0;
-            const viewModeLabel = { 'annual': '年度', 'monthly': `月度 (${selectedMonth})`, 'weekly': `週次 (${selectedMonth})` }[viewMode];
-
-            if (isLoading && !rawDataMap) {
-                return (
-                    <div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-slate-500">
-                        <Loader2 className="w-10 h-10 animate-spin mb-4 text-blue-600" />
-                        <p>Loading Dashboard...</p>
-                        {isFirebaseInitialized && <p className="text-xs mt-2 text-emerald-600 flex items-center"><Wifi className="w-3 h-3 mr-1"/> Syncing with Firebase...</p>}
-                    </div>
-                );
-            }
-
-            return (
-                <div className="min-h-screen bg-slate-50 flex font-sans text-slate-900">
-                    {/* Sidebar */}
-                    <aside className="w-64 bg-slate-900 text-white hidden md:flex flex-col">
-                        <div className="p-6 border-b border-slate-800">
-                            <div className="flex items-center space-x-2">
-                                <div className="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
-                                    <TrendingUp className="w-5 h-5 text-white" />
-                                </div>
-                                <span className="text-lg font-bold tracking-tight">RobotSchool<span className="text-blue-400">Dash</span></span>
-                            </div>
-                        </div>
-                        <nav className="flex-1 py-6 px-3 space-y-1">
-                            <button onClick={() => setActiveTab('summary')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'summary' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
-                                <LayoutDashboard className="w-5 h-5" />
-                                <span className="font-medium">経営サマリー</span>
-                            </button>
-                            <button onClick={() => setActiveTab('students')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'students' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
-                                <Users className="w-5 h-5" />
-                                <span className="font-medium">生徒管理</span>
-                            </button>
-                            <button onClick={() => setActiveTab('marketing')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'marketing' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
-                                <Megaphone className="w-5 h-5" />
-                                <span className="font-medium">集客・販促</span>
-                            </button>
-                            <button onClick={() => setActiveTab('settings')} className={`w-full flex items-center space-x-3 px-3 py-3 rounded-lg transition-colors ${activeTab === 'settings' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:bg-slate-800'}`}>
-                                <Settings className="w-5 h-5" />
-                                <span className="font-medium">校舎設定</span>
-                            </button>
-                        </nav>
-                        <div className="p-4 border-t border-slate-800 text-xs text-slate-400 space-y-2">
-                            <div className="flex items-center justify-between">
-                                <div className="flex items-center">
-                                    <Database className={`w-3 h-3 mr-1 ${isFirebaseInitialized ? 'text-emerald-400' : 'text-slate-500'}`} />
-                                    {isFirebaseInitialized ? 'Firebase Connected' : 'Local Mode'}
-                                </div>
-                                {isSyncing && <RefreshCw className="w-3 h-3 animate-spin text-blue-400" />}
-                            </div>
-                            <div className="flex items-center">
-                                <MapPin className="w-3 h-3 mr-1" />
-                                {selectedCampusName}
-                            </div>
-                            <div className="flex items-center">
-                                <Calendar className="w-3 h-3 mr-1" />
-                                {selectedYear}年度
-                            </div>
-                        </div>
-                    </aside>
-
-                    {/* Main Area */}
-                    <main className="flex-1 flex flex-col overflow-hidden h-screen">
-                        {errorMsg && (
-                            <div className="bg-red-50 border-l-4 border-red-500 p-4 m-4 mb-0 flex justify-between items-center">
-                                <div className="flex">
-                                    <div className="flex-shrink-0">
-                                        <AlertCircle className="h-5 w-5 text-red-500" />
-                                    </div>
-                                    <div className="ml-3">
-                                        <p className="text-sm text-red-700">{errorMsg}</p>
-                                    </div>
-                                </div>
-                                <button onClick={() => setErrorMsg(null)} className="text-red-500 hover:text-red-700 font-bold">×</button>
-                            </div>
-                        )}
-                        
-                        <header className="bg-white border-b border-slate-200 h-16 flex items-center justify-between px-6 sticky top-0 z-10 shrink-0">
-                            <h1 className="text-xl font-bold text-slate-800">
-                                {activeTab === 'summary' && '経営サマリー'}
-                                {activeTab === 'students' && '生徒数・入退会管理'}
-                                {activeTab === 'marketing' && '集客活動・販促管理'}
-                                {activeTab === 'settings' && '校舎設定・管理'}
-                            </h1>
-                            
-                            <div className="flex items-center space-x-3">
-                                {activeTab !== 'settings' && (
-                                    <>
-                                        {/* 年度切り替え */}
-                                        <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200">
-                                            <span className="text-xs text-slate-500 mr-2 font-bold">年度</span>
-                                            <select 
-                                                value={selectedYear} 
-                                                onChange={(e) => setSelectedYear(Number(e.target.value))} 
-                                                className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1"
-                                            >
-                                                {YEARS_LIST.map(y => <option key={y} value={y}>{y}年度</option>)}
-                                            </select>
-                                        </div>
-
-                                        <div className="flex bg-slate-100 rounded-lg p-1 border border-slate-200">
-                                            <button onClick={() => setViewMode('annual')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'annual' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>年度</button>
-                                            <button onClick={() => setViewMode('monthly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'monthly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>月度</button>
-                                            <button onClick={() => setViewMode('weekly')} className={`px-3 py-1 text-xs font-medium rounded-md transition-all ${viewMode === 'weekly' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}>週次</button>
-                                        </div>
-
-                                        {viewMode !== 'annual' && (
-                                            <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200 animate-in fade-in zoom-in duration-200">
-                                                <Calendar className="w-3 h-3 text-slate-500 mr-2" />
-                                                <select value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1 pr-1">
-                                                    {MONTHS_LIST.map(m => <option key={m} value={m}>{m}</option>)}
-                                                </select>
-                                            </div>
-                                        )}
-
-                                        <div className="flex items-center bg-slate-100 rounded-lg px-3 py-1 border border-slate-200">
-                                            <MapPin className="w-3 h-3 text-slate-500 mr-2" />
-                                            <select value={selectedCampusId} onChange={(e) => setSelectedCampusId(e.target.value)} className="bg-transparent border-none text-sm font-medium text-slate-700 focus:ring-0 cursor-pointer py-1">
-                                                <option value="All">全校舎 (合計)</option>
-                                                <option disabled>──────────</option>
-                                                {campusList.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                                            </select>
-                                        </div>
-
-                                        <button onClick={() => fetchDashboardData(campusList)} className="p-2 text-slate-400 hover:text-blue-600 hover:bg-blue-50 rounded-lg transition-all">
-                                            <RefreshCw className="w-4 h-4" />
-                                        </button>
-                                    </>
-                                )}
-                            </div>
-                        </header>
-
-                        <div className="flex-1 overflow-y-auto p-6">
-                            <div className="max-w-7xl mx-auto space-y-6">
-                                {/* Settings View */}
-                                {activeTab === 'settings' && (
-                                    <div className="space-y-6 animate-in fade-in duration-500">
-                                        <div className="bg-white p-8 rounded-xl shadow-sm border border-slate-100">
-                                            <h2 className="text-lg font-bold text-slate-800 mb-6 flex items-center">
-                                                <School className="w-5 h-5 mr-2 text-blue-600" />
-                                                校舎マスター管理
-                                                {isFirebaseInitialized && <span className="ml-3 text-xs bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full flex items-center"><Wifi className="w-3 h-3 mr-1"/> リアルタイム同期中</span>}
-                                            </h2>
-                                            
-                                            <div className="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8 items-end">
-                                                <div className="md:col-span-1">
-                                                    <label className="block text-sm font-medium text-slate-700 mb-2">校舎ID <span className="text-xs text-red-500">*英数</span></label>
-                                                    <div className="relative">
-                                                        <Key className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                                                        <input 
-                                                            type="text" 
-                                                            value={newCampusId}
-                                                            onChange={(e) => setNewCampusId(e.target.value)}
-                                                            placeholder="例: shibuya" 
-                                                            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div className="md:col-span-1">
-                                                    <label className="block text-sm font-medium text-slate-700 mb-2">校舎名</label>
-                                                    <input 
-                                                        type="text" 
-                                                        value={newCampusName}
-                                                        onChange={(e) => setNewCampusName(e.target.value)}
-                                                        placeholder="例: 渋谷校" 
-                                                        className="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                                                    />
-                                                </div>
-                                                <div className="md:col-span-2">
-                                                    <label className="block text-sm font-medium text-slate-700 mb-2">
-                                                        スプレッドシート上の表記 (M列)
-                                                        <span className="text-xs text-slate-400 font-normal ml-2">※未入力時は校舎名と同じ</span>
-                                                    </label>
-                                                    <div className="relative">
-                                                        <FileSpreadsheet className="w-4 h-4 absolute left-3 top-3 text-slate-400" />
-                                                        <input 
-                                                            type="text" 
-                                                            value={newCampusSheetName}
-                                                            onChange={(e) => setNewCampusSheetName(e.target.value)}
-                                                            placeholder="例: 渋谷校" 
-                                                            className="w-full pl-10 pr-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all"
-                                                        />
-                                                    </div>
-                                                </div>
-                                                <div className="md:col-span-1">
-                                                    <button 
-                                                        onClick={handleAddCampus}
-                                                        disabled={!newCampusId.trim() || !newCampusName.trim()}
-                                                        className="w-full px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center transition-all shadow-sm"
-                                                    >
-                                                        <Plus className="w-4 h-4 mr-2" />
-                                                        登録
-                                                    </button>
-                                                </div>
-                                            </div>
-
-                                            <div className="border-t border-slate-100 pt-6">
-                                                <h3 className="text-sm font-bold text-slate-500 mb-4 uppercase tracking-wider">登録済み校舎一覧 ({campusList.length}校)</h3>
-                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                                                    {campusList.map((campus) => (
-                                                        <div key={campus.id} className="flex flex-col justify-between p-4 bg-slate-50 rounded-lg border border-slate-200 group hover:border-blue-200 hover:bg-blue-50/30 transition-all">
-                                                            <div className="flex items-start justify-between mb-2">
-                                                                <div className="flex items-center overflow-hidden">
-                                                                    <div className="w-8 h-8 flex-shrink-0 rounded-full bg-white border border-slate-200 flex items-center justify-center mr-3 text-slate-500 font-bold text-xs">
-                                                                        {campus.name.charAt(0)}
-                                                                    </div>
-                                                                    <div className="overflow-hidden">
-                                                                        <div className="font-medium text-slate-700 truncate">{campus.name}</div>
-                                                                        <div className="text-xs text-slate-400 font-mono">ID: {campus.id}</div>
-                                                                    </div>
-                                                                </div>
-                                                                <button 
-                                                                    onClick={() => handleDeleteCampus(campus.id, campus.name)}
-                                                                    className="text-slate-400 hover:text-red-600 p-1 rounded-full hover:bg-red-50 transition-colors opacity-0 group-hover:opacity-100"
-                                                                    title="削除"
-                                                                >
-                                                                    <Trash2 className="w-4 h-4" />
-                                                                </button>
-                                                            </div>
-                                                            <div className="text-xs text-slate-500 bg-white p-2 rounded border border-slate-100 flex items-center">
-                                                                <Link2 className="w-3 h-3 mr-1 text-emerald-500 flex-shrink-0" />
-                                                                <span className="truncate">連携名: {campus.sheetName || campus.name}</span>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            </div>
-                                            
-                                            {/* GAS Integration Guide */}
-                                            <div className="mt-8 pt-6 border-t border-slate-100">
-                                                <h3 className="text-sm font-bold text-slate-700 mb-3 flex items-center">
-                                                    <FileSpreadsheet className="w-4 h-4 mr-2 text-emerald-600" />
-                                                    Google Sheets 連携 (自動入会同期)
-                                                </h3>
-                                                <div className="bg-slate-50 p-4 rounded-lg text-sm text-slate-600 space-y-2">
-                                                    <p>Googleフォームと連携したスプレッドシートにGASを設定することで、入会申込を自動的にこのダッシュボードに反映できます。</p>
-                                                    <p className="text-xs text-slate-400">※ 入会データとの紐付けは「連携名（スプレッドシート上の表記）」で行われます。フォームの選択肢と一致させてください。</p>
-                                                    <div className="flex items-center mt-2">
-                                                        <span className="font-semibold mr-2">現在の同期データ数:</span>
-                                                        <span className="bg-white px-2 py-0.5 rounded border border-slate-200 font-mono">{realEnrollments.length} 件</span>
-                                                    </div>
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Summary View */}
-                                {activeTab === 'summary' && (
-                                    <div className="space-y-6 animate-in fade-in duration-500">
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-                                            <StatCard title="売上実績 (選択期間)" value={formatYen(totals.actualRevenue)} subValue={`予算比 ${revenueAchievement}%`} trend={revenueAchievement - 100} icon={DollarSign} color="bg-blue-500" />
-                                            <StatCard title="生徒数" value={`${currentTotalStudents}名`} subValue="在籍数" trend={0} icon={Users} color="bg-indigo-500" />
-                                            <StatCard title="体験会 (選択期間)" value={`${totals.trialLessons}回`} subValue="実施回数" trend={0} icon={Calendar} color="bg-amber-500" />
-                                            <StatCard title="入会数 (自動集計)" value={`${totals.newEnrollments}名`} subValue={realEnrollments.length > 0 ? "Google Forms連携中" : "連携データなし"} trend={0} icon={Activity} color="bg-emerald-500" />
-                                        </div>
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-96">
-                                            <div className="flex justify-between items-center mb-4">
-                                                <h3 className="text-lg font-bold text-slate-800">
-                                                    予実管理推移 (売上)
-                                                </h3>
-                                                <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-                                                    {selectedCampusName} / {viewModeLabel}
-                                                </span>
-                                            </div>
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <ComposedChart data={displayData} margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
-                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                    <XAxis dataKey="name" />
-                                                    <YAxis tickFormatter={(val) => `${val/10000}万`} />
-                                                    <Tooltip formatter={(value) => formatYen(value)} />
-                                                    <Legend />
-                                                    <Bar dataKey="budgetRevenue" name="予算" fill="#cbd5e1" radius={[4, 4, 0, 0]} />
-                                                    <Line type="monotone" dataKey="actualRevenue" name="実績" stroke="#3b82f6" strokeWidth={3} />
-                                                </ComposedChart>
-                                            </ResponsiveContainer>
-                                        </div>
-                                    </div>
-                                )}
-
-                                {/* Students View */}
-                                {activeTab === 'students' && (
-                                    <div className="space-y-6 animate-in fade-in duration-500">
-                                        {/* 生徒数KPIカード (修正: 内訳表示を追加) */}
-                                        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                                            <StatCard 
-                                                title="期間内 増加数" 
-                                                value={`${totals.newEnrollments + totals.returns}名`} 
-                                                subValue="入会 + 復会" 
-                                                trend={0} 
-                                                icon={Users} 
-                                                color="bg-emerald-500"
-                                                details={[
-                                                    { label: '新規入会', value: totals.newEnrollments },
-                                                    { label: '復会', value: totals.returns }
-                                                ]}
-                                            />
-                                            <StatCard 
-                                                title="期間内 減少数" 
-                                                value={`${totals.withdrawals + totals.graduates + totals.recesses + totals.transfers}名`} 
-                                                subValue="退会 + 休会 + 卒業 + 転校" 
-                                                trend={0} 
-                                                icon={Users} 
-                                                color="bg-rose-500" 
-                                                details={[
-                                                    { label: '退会', value: totals.withdrawals },
-                                                    { label: '休会', value: totals.recesses },
-                                                    { label: '卒業', value: totals.graduates },
-                                                    { label: '転校', value: totals.transfers }
-                                                ]}
-                                            />
-                                            <StatCard 
-                                                title="期間内 純増数" 
-                                                value={`${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers) > 0 ? '+' : ''}${(totals.newEnrollments + totals.returns) - (totals.withdrawals + totals.graduates + totals.recesses + totals.transfers)}名`} 
-                                                subValue="増加 - 減少" 
-                                                trend={0} 
-                                                icon={TrendingUp} 
-                                                color="bg-blue-500" 
-                                            />
-                                            <StatCard 
-                                                title="在籍生徒数" 
-                                                value={`${currentTotalStudents}名`} 
-                                                subValue="累計生徒在籍数" 
-                                                trend={0} 
-                                                icon={School} 
-                                                color="bg-indigo-500" 
-                                            />
-                                        </div>
-
-                                        {/* グラフ */}
-                                        <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[400px]">
-                                            <div className="flex justify-between items-center mb-6">
-                                                <h3 className="text-lg font-bold text-slate-800">生徒数増減フロー</h3>
-                                                <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-                                                    {selectedCampusName} / {viewModeLabel}
-                                                </span>
-                                            </div>
-                                            <ResponsiveContainer width="100%" height="100%">
-                                                <BarChart data={displayData} stackOffset="sign" margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                                                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                    <XAxis dataKey="name" />
-                                                    <YAxis />
-                                                    <Tooltip />
-                                                    <Legend />
-                                                    {/* プラス要素 */}
-                                                    <Bar dataKey="newEnrollments" name="入会" fill="#10b981" stackId="stack" />
-                                                    <Bar dataKey="returns" name="復会" fill="#34d399" stackId="stack" />
-                                                    
-                                                    {/* マイナス要素 */}
-                                                    <Bar dataKey="withdrawals" name="退会" fill="#ef4444" stackId="stack" />
-                                                    <Bar dataKey="recesses" name="休会" fill="#f59e0b" stackId="stack" />
-                                                    <Bar dataKey="transfers" name="転校" fill="#f97316" stackId="stack" />
-                                                    <Bar dataKey="graduates" name="卒業" fill="#a855f7" stackId="stack" />
-                                                </BarChart>
-                                            </ResponsiveContainer>
-                                        </div>
-
-                                        {/* 詳細テーブル */}
-                                        <div className="bg-white rounded-xl shadow-sm border border-slate-100 overflow-hidden">
-                                            <div className="p-6 border-b border-slate-100">
-                                                <h3 className="text-lg font-bold text-slate-800">生徒数推移詳細</h3>
-                                            </div>
-                                            <div className="overflow-x-auto">
-                                                <table className="w-full text-sm text-left">
-                                                    <thead className="bg-slate-50 text-slate-500 font-medium border-b border-slate-200">
-                                                        <tr>
-                                                            <th className="px-4 py-3">期間</th>
-                                                            <th className="px-4 py-3 text-emerald-600 bg-emerald-50/30">入会</th>
-                                                            <th className="px-4 py-3 text-emerald-600 bg-emerald-50/30">復会</th>
-                                                            <th className="px-4 py-3 text-rose-600 bg-rose-50/30">退会</th>
-                                                            <th className="px-4 py-3 text-amber-600 bg-amber-50/30">休会</th>
-                                                            <th className="px-4 py-3 text-orange-600 bg-orange-50/30">転校</th>
-                                                            <th className="px-4 py-3 text-purple-600 bg-purple-50/30">卒業</th>
-                                                            <th className="px-4 py-3 font-bold border-l border-slate-100">在籍生徒数</th>
-                                                        </tr>
-                                                    </thead>
-                                                    <tbody className="divide-y divide-slate-100">
-                                                        {displayData.map((row, i) => (
-                                                            <tr key={i} className="hover:bg-slate-50 transition-colors">
-                                                                <td className="px-4 py-3 font-medium text-slate-900">{row.name}</td>
-                                                                <td className="px-4 py-3 bg-emerald-50/10">{row.newEnrollments}</td>
-                                                                <td className="px-4 py-3 bg-emerald-50/10">{row.returns}</td>
-                                                                <td className="px-4 py-3 bg-rose-50/10">{row.withdrawals}</td>
-                                                                <td className="px-4 py-3 bg-amber-50/10">{row.recesses}</td>
-                                                                <td className="px-4 py-3 bg-orange-50/10">{row.transfers}</td>
-                                                                <td className="px-4 py-3 bg-purple-50/10">{row.graduates}</td>
-                                                                <td className="px-4 py-3 font-bold border-l border-slate-100">{row.totalStudents}</td>
-                                                            </tr>
-                                                        ))}
-                                                    </tbody>
-                                                </table>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                                
-                                {/* Marketing View */}
-                                {activeTab === 'marketing' && (
-                                    <div className="bg-white p-6 rounded-xl shadow-sm border border-slate-100 h-[500px] animate-in fade-in duration-500">
-                                        <div className="flex justify-between items-center mb-6">
-                                            <h3 className="text-lg font-bold text-slate-800">集客ファネル</h3>
-                                            <span className="text-sm text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
-                                                {selectedCampusName} / {viewModeLabel}
-                                            </span>
-                                        </div>
-                                        <ResponsiveContainer width="100%" height="100%">
-                                            <ComposedChart data={displayData} margin={{ top: 20, right: 30, left: 20, bottom: 5 }}>
-                                                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                                                <XAxis dataKey="name" />
-                                                <YAxis yAxisId="left" orientation="left" />
-                                                <YAxis yAxisId="right" orientation="right" />
-                                                <Tooltip />
-                                                <Legend />
-                                                <Bar yAxisId="left" dataKey="flyers" name="チラシ配布" fill="#94a3b8" />
-                                                <Line yAxisId="right" type="monotone" dataKey="newEnrollments" name="入会数" stroke="#10b981" strokeWidth={3} />
-                                            </ComposedChart>
-                                        </ResponsiveContainer>
-                                    </div>
-                                )}
-                            </div>
-                        </div>
-                    </main>
-                </div>
-            );
-        }
-
-        const root = createRoot(document.getElementById('root'));
-        root.render(<RobotSchoolDashboard />);
-    </script>
-</body>
-</html>
