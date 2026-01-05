@@ -34,6 +34,7 @@
     <div id="root"></div>
 
     <!-- アプリケーションのスクリプト -->
+    <!-- 外部ファイル読み込みによるエラーを回避するため、インラインスクリプトに変更しました -->
     <script type="text/babel" data-type="module">
         import React, { useState, useMemo, useEffect, useRef } from "react";
         import { createRoot } from "react-dom/client";
@@ -72,21 +73,6 @@
                 // ... (Google Sheets設定は維持)
             }
         };
-
-        // デフォルトの校舎リスト（ID付きオブジェクト配列に変更）
-        const DEFAULT_CAMPUS_LIST = [
-            { id: 'toyota', name: '豊田本店', sheetName: '豊田本店' },
-            { id: 'aoyama', name: '青山本校', sheetName: '青山本校' },
-            { id: 'shinjuku', name: '新宿校', sheetName: '新宿校' },
-            { id: 'ikebukuro', name: '池袋校', sheetName: '池袋校' },
-            { id: 'yokohama', name: '横浜校', sheetName: '横浜校' },
-            { id: 'kichijoji', name: '吉祥寺校', sheetName: '吉祥寺校' },
-            { id: 'omiya', name: '大宮校', sheetName: '大宮校' },
-            { id: 'chiba', name: '千葉校', sheetName: '千葉校' },
-            { id: 'nagoya', name: '名古屋校', sheetName: '名古屋校' },
-            { id: 'osaka', name: '大阪梅田校', sheetName: '大阪梅田校' },
-            { id: 'fukuoka', name: '福岡天神校', sheetName: '福岡天神校' }
-        ];
 
         const MONTHS_LIST = ['4月', '5月', '6月', '7月', '8月', '9月', '10月', '11月', '12月', '1月', '2月', '3月'];
         
@@ -185,8 +171,8 @@
             const [selectedMonth, setSelectedMonth] = useState(currentMonthStr);
             const [selectedYear, setSelectedYear] = useState(currentFiscalYear);
 
-            // 校舎管理用ステート
-            const [campusList, setCampusList] = useState(DEFAULT_CAMPUS_LIST);
+            // 校舎管理用ステート (デフォルトリストは削除し空で初期化)
+            const [campusList, setCampusList] = useState([]);
             const [newCampusName, setNewCampusName] = useState("");
             const [newCampusId, setNewCampusId] = useState(""); // 新規: 校舎ID入力用
             const [newCampusSheetName, setNewCampusSheetName] = useState(""); // 新規: スプシ連携用名
@@ -241,6 +227,7 @@
                 }, (error) => {
                     console.error("Campus sync error:", error);
                     setIsSyncing(false);
+                    fetchDashboardData([]);
                 });
                 return () => unsubscribe();
             }, []);
@@ -629,7 +616,7 @@
             // 初回ロード (ローカルモード用)
             useEffect(() => {
                 if (!isFirebaseInitialized) {
-                    fetchDashboardData(DEFAULT_CAMPUS_LIST);
+                    fetchDashboardData([]);
                 }
             }, []);
 
