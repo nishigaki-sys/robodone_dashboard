@@ -37,7 +37,7 @@
         import { getFirestore, collection, doc, setDoc, getDoc, deleteDoc, onSnapshot, query, orderBy, serverTimestamp } from "firebase/firestore";
 
         // ==========================================
-        // ★★★ Firebase設定 (ここを書き換えてください) ★★★
+        // Firebase設定
         // ==========================================
         const FIREBASE_CONFIG = {
             apiKey: "AIzaSyCsgMN0SWCC1SvCDIakYBejTWlxwBmiwJk",
@@ -55,12 +55,12 @@
         let db = null;
         let isFirebaseInitialized = false;
         try {
-            if (FIREBASE_CONFIG.apiKey && FIREBASE_CONFIG.apiKey !== "YOUR_FIREBASE_API_KEY") {
+            if (FIREBASE_CONFIG.apiKey) {
                 const app = initializeApp(FIREBASE_CONFIG);
                 db = getFirestore(app);
                 isFirebaseInitialized = true;
             }
-        } catch (e) { console.error(e); }
+        } catch (e) { console.error("Firebase Init Error:", e); }
 
         // ヘルパー関数
         const getFiscalYear = (date) => {
@@ -145,7 +145,9 @@
                 return c ? c.name : selectedCampusId;
             }, [selectedCampusId, campusList]);
 
-            // --- Firebase Sync ---
+            // ----------------------------------------------------------------
+            // Firebase Sync
+            // ----------------------------------------------------------------
             useEffect(() => {
                 if (!isFirebaseInitialized || !db) { setIsLoading(false); return; }
                 
@@ -185,11 +187,13 @@
                 setDailyReport(r ? { weather: r.weather, touchTry: r.touchTry, flyers: r.flyers, trialLessons: r.trialLessons } : { weather: 'sunny', touchTry: 0, flyers: 0, trialLessons: 0 });
             }, [reportDate, selectedCampusId, realDailyReports]);
 
-            // --- 集計ロジック ---
+            // ----------------------------------------------------------------
+            // 集計ロジック
+            // ----------------------------------------------------------------
             useEffect(() => {
                 const generateData = async () => {
                     setIsLoading(true);
-                    await new Promise(r => setTimeout(r, 100)); // Non-blocking UI update
+                    await new Promise(r => setTimeout(r, 100));
                     const map = calculateData();
                     setRawDataMap(map);
                     setIsLoading(false);
@@ -217,14 +221,14 @@
                     return acc;
                 }, {});
 
-                // 期首在庫計算 (前年度までの累積)
+                // 期首在庫計算
                 const prevEnroll = countBy(filterBeforeYear(realEnrollments));
                 const prevTransIn = countBy(filterBeforeYear(realTransfers));
                 const prevWithdraw = countBy(filterBeforeYear(realStatusChanges), i => i.type?.includes('退会'));
                 const prevTransOut = countBy(filterBeforeYear(realStatusChanges), i => i.type?.includes('転校'));
                 const prevGrad = countBy(filterBeforeYear(realStatusChanges), i => i.type?.includes('卒業'));
 
-                // 当年度データ (月次・日次集計用)
+                // 当年度データ
                 const currEnroll = filterByYear(realEnrollments);
                 const currTransIn = filterByYear(realTransfers);
                 const currStatus = filterByYear(realStatusChanges);
@@ -232,7 +236,6 @@
 
                 campusList.forEach(campus => {
                     const cid = campus.id;
-                    // 期首人数: 入会+転入 - (退会+転出+卒業) ※休会・復会は含まない
                     let currentStudents = (prevEnroll[cid]||0) + (prevTransIn[cid]||0) - ((prevWithdraw[cid]||0) + (prevTransOut[cid]||0) + (prevGrad[cid]||0));
 
                     dataMap[cid] = MONTHS_LIST.map((month, mIdx) => {
@@ -245,7 +248,7 @@
                             withdrawals_neg: 0, transfers_neg: 0, graduates_neg: 0, recesses_neg: 0
                         }));
 
-                        // 日次集計ヘルパー
+                        // 日次集計
                         const aggDay = (list, type, checkType=null) => {
                             list.forEach(item => {
                                 if (sheetToId[item.campus] !== cid) return;
@@ -278,7 +281,7 @@
                             }
                         });
 
-                        // 月次集計 & 在籍数推移 & グラフ用マイナス値設定
+                        // 月次集計 & 在籍数推移
                         let mVal = { enroll:0, transIn:0, ret:0, with:0, transOut:0, grad:0, rec:0, flyer:0, touch:0, trial:0 };
                         
                         daily.forEach(d => {
@@ -286,18 +289,16 @@
                             mVal.with += d.withdrawals; mVal.transOut += d.transfers; mVal.grad += d.graduates; mVal.rec += d.recesses;
                             mVal.flyer += d.flyers; mVal.touch += d.touchAndTry; mVal.trial += d.trialLessons;
                             
-                            // グラフ用マイナス値
                             d.withdrawals_neg = -d.withdrawals;
                             d.transfers_neg = -d.transfers;
                             d.graduates_neg = -d.graduates;
                             d.recesses_neg = -d.recesses;
                         });
 
-                        // 月末在籍計算: 入会+転入 - (退会+転出+卒業) ※復会・休会は除外
                         const netChange = (mVal.enroll + mVal.transIn) - (mVal.with + mVal.transOut + mVal.grad);
                         currentStudents += netChange;
 
-                        // 週次データ生成
+                        // 週次データ
                         const weekly = Array.from({length: 4}, (_, w) => {
                             const start = w * 7;
                             const end = w === 3 ? 30 : (w + 1) * 7;
@@ -307,7 +308,7 @@
                             }, {});
                             return { name: `第${w+1}週`, ...weekData, totalStudents: currentStudents };
                         });
-                        daily.forEach(d => d.totalStudents = currentStudents); // 日次は簡易的に月末値をセット
+                        daily.forEach(d => d.totalStudents = currentStudents);
 
                         return {
                             name: month,
@@ -347,13 +348,60 @@
                 if (!rawDataMap) return;
                 const data = rawDataMap[selectedCampusId];
                 if (!data) { setDisplayData([]); return; }
-
                 if (viewMode === 'annual') setDisplayData(data);
                 else {
                     const mData = data.find(d => d.name === selectedMonth);
                     setDisplayData(mData ? (viewMode === 'monthly' ? mData.daily : mData.weekly) : []);
                 }
             }, [rawDataMap, selectedCampusId, viewMode, selectedMonth]);
+
+            // ハンドラ定義
+            const handleAddCampus = async () => {
+                const id = newCampusId.trim(), name = newCampusName.trim(), sheetName = newCampusSheetName.trim() || name;
+                if (!id || !name) return alert("校舎IDと校舎名は必須です。");
+                if (campusList.some(c => c.id === id)) return alert("ID重複");
+                if (isFirebaseInitialized && db) await setDoc(doc(db, "campuses", id), { id, name, sheetName, createdAt: serverTimestamp() });
+                setNewCampusId(""); setNewCampusName(""); setNewCampusSheetName("");
+            };
+
+            const handleDeleteCampus = async (targetId, targetName) => {
+                if (!confirm(`${targetName} を削除しますか？`)) return;
+                if (isFirebaseInitialized && db) {
+                    await deleteDoc(doc(db, "campuses", targetId));
+                    if (selectedCampusId === targetId) setSelectedCampusId('All');
+                }
+            };
+
+            const handlePlanChange = (month, field, value) => {
+                setPlanData(prev => {
+                    const newData = { ...prev };
+                    newData[month] = { ...newData[month], [field]: Number(value) };
+                    if (field === 'enrollments' || field === 'trials') {
+                        const enr = field === 'enrollments' ? Number(value) : newData[month].enrollments;
+                        const tri = field === 'trials' ? Number(value) : newData[month].trials;
+                        newData[month].rate = tri > 0 ? ((enr / tri) * 100).toFixed(1) : 0;
+                    }
+                    return newData;
+                });
+            };
+
+            const savePlanData = async () => {
+                if (selectedCampusId === 'All') return;
+                setIsSavingPlan(true);
+                try {
+                    await setDoc(doc(db, "campus_plans", `${selectedCampusId}_${selectedYear}`), { campusId: selectedCampusId, year: selectedYear, plans: planData, updatedAt: serverTimestamp() });
+                    alert("保存しました。");
+                } catch (e) { alert("保存失敗: " + e.message); } finally { setIsSavingPlan(false); }
+            };
+
+            const handleSaveDailyReport = async () => {
+                if (selectedCampusId === 'All') return;
+                setIsSavingReport(true);
+                try {
+                    await setDoc(doc(db, "daily_reports", `${selectedCampusId}_${reportDate}`), { campusId: selectedCampusId, date: reportDate, ...dailyReport, updatedAt: serverTimestamp() });
+                    alert("日報を保存しました。");
+                } catch (e) { alert("保存失敗: " + e.message); } finally { setIsSavingReport(false); }
+            };
 
             // Totals
             const totals = useMemo(() => {
@@ -364,10 +412,25 @@
                 }, init);
             }, [displayData]);
 
-            // Render
-            const currentTotalStudents = displayData.length > 0 ? (viewMode === 'annual' ? displayData[displayData.length-1].totalStudents : displayData[0].totalStudents) : 0;
+            // 本日の入会数
+            const todayEnrollmentsCount = useMemo(() => {
+                if (!realEnrollments) return 0;
+                const sheetNameToIdMap = {};
+                campusList.forEach(c => sheetNameToIdMap[c.sheetName || c.name] = c.id);
+                return realEnrollments.filter(e => {
+                    const d = new Date(e.date);
+                    if (isNaN(d.getTime())) return false;
+                    return formatDate(d) === reportDate && sheetNameToIdMap[e.campus] === selectedCampusId;
+                }).length;
+            }, [realEnrollments, reportDate, selectedCampusId, campusList]);
 
-            if (isLoading) return <div className="min-h-screen flex items-center justify-center text-slate-500"><Loader2 className="w-10 h-10 animate-spin mr-2" />Loading...</div>;
+            const revenueAchievement = totals.budgetRevenue > 0 ? Math.round((totals.actualRevenue / totals.budgetRevenue) * 100) : 0;
+            const currentTotalStudents = displayData.length > 0 ? (viewMode === 'annual' ? displayData[displayData.length-1].totalStudents : displayData[0].totalStudents) : 0;
+            const viewModeLabel = { 'annual': '年度', 'monthly': `月度 (${selectedMonth})`, 'weekly': `週次 (${selectedMonth})` }[viewMode];
+
+            if (isLoading && !rawDataMap) {
+                return (<div className="min-h-screen bg-slate-50 flex flex-col items-center justify-center text-slate-500"><Loader2 className="w-10 h-10 animate-spin mr-2" />Loading...</div>);
+            }
 
             return (
                 <div className="min-h-screen bg-slate-50 flex text-slate-900 font-sans">
@@ -468,7 +531,7 @@
                                                                 <div><label className="block text-sm font-bold">タッチ＆トライ</label><input type="number" className="border rounded w-full p-2" value={dailyReport.touchTry} onChange={e=>setDailyReport({...dailyReport,touchTry:Number(e.target.value)})}/></div>
                                                                 <div><label className="block text-sm font-bold">門配数</label><input type="number" className="border rounded w-full p-2" value={dailyReport.flyers} onChange={e=>setDailyReport({...dailyReport,flyers:Number(e.target.value)})}/></div>
                                                                 <div><label className="block text-sm font-bold">体験会実施</label><input type="number" className="border rounded w-full p-2" value={dailyReport.trialLessons} onChange={e=>setDailyReport({...dailyReport,trialLessons:Number(e.target.value)})}/></div>
-                                                                <div><label className="block text-sm font-bold">本日入会(自動)</label><div className="bg-slate-100 p-2 rounded text-center font-mono">{useMemo(() => { if(!realEnrollments)return 0; const tid = campusList.find(c=>c.id===selectedCampusId)?.sheetName; return realEnrollments.filter(e=>formatDate(new Date(e.date))===reportDate && (e.campus===tid||e.campus===selectedCampusName)).length; }, [realEnrollments,reportDate,selectedCampusId])} 名</div></div>
+                                                                <div><label className="block text-sm font-bold">本日入会(自動)</label><div className="bg-slate-100 p-2 rounded text-center font-mono">{todayEnrollmentsCount} 名</div></div>
                                                             </div>
                                                             <button onClick={handleSaveDailyReport} disabled={isSaving} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 disabled:opacity-50"><Save className="inline mr-2"/>保存</button>
                                                         </div>
